@@ -485,7 +485,7 @@
       "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "temp_sensor.step",
       "svg": "",
       "vrml": ""
     },
