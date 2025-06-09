@@ -45,7 +45,7 @@ void HDC302xComponent::update() {
   this->temperature_->publish_state(temperature);
   this->humidity_->publish_state(humidity);
 
-  ESP_LOGD(TAG, "Got temperature=%.1f°C humidity=%.1f%%", temp, humidity);
+  ESP_LOGD(TAG, "Got temperature=%.1f°C humidity=%.1f%%", temperature, humidity);
   this->status_clear_warning();
 }
 float HDC302xComponent::get_setup_priority() const { return setup_priority::DATA; }
