@@ -29,7 +29,7 @@ void HDC302xComponent::update() {
     this->status_set_warning();
     return;
   }
-  delay(20);
+  delay(14); // Datasheet specifies 12.5ms, leaving 1.5ms as buffer
   if (this->read(reinterpret_cast<uint8_t *>(&read_buffer), 6) != i2c::ERROR_OK) {
     this->status_set_warning();
     return;
