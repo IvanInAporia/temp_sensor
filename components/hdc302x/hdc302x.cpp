@@ -36,11 +36,11 @@ void HDC302xComponent::update() {
   }
   uint16_t humidity_raw = read_buffer[3] << 8;   
   humidity_raw = (humidity_raw + read_buffer[4]);
-  humidity = (((float)(humidity_raw)) / 65535) * 100;  // conversion on the HDC3x datasheet
+  float humidity = (((float)(humidity_raw)) / 65535) * 100;  // conversion on the HDC3x datasheet
   
   uint16_t temp_raw = (read_buffer[0] << 8);
   temp_raw = (temp_raw + read_buffer[1]);   
-  temperature = ((float)(temp_raw) / 65535) * (175) - 45;
+  float temperature = ((float)(temp_raw) / 65535) * (175) - 45;
 
   this->temperature_->publish_state(temperature);
   this->humidity_->publish_state(humidity);
