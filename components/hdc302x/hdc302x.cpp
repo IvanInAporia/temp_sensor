@@ -10,7 +10,7 @@ static const char *const TAG = "hdc302x";
 static const uint8_t HDC302x_CMD_READ[2] = {0x24, 0x00};
 
 void HDC302xComponent::setup() {
-  ESP_LOGCONFIG(TAG, "Running setup");
+
 }
 
 void HDC302xComponent::dump_config() {
@@ -45,7 +45,6 @@ void HDC302xComponent::update() {
   this->temperature_->publish_state(temperature);
   this->humidity_->publish_state(humidity);
 
-  ESP_LOGD(TAG, "Got temperature=%.1f°C humidity=%.1f%%", temperature, humidity);
   this->status_clear_warning();
 }
 float HDC302xComponent::get_setup_priority() const { return setup_priority::DATA; }
