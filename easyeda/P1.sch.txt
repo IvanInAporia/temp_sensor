@@ -1,0 +1,385 @@
+# SCHEMATIC REVIEW EXPORT
+source: P1.schdoc
+sha256-12: 81829856c3c5
+exporter: eda_review_export.py v1.1
+content: connectivity + component attributes only; symbol placement, wire routing, colours and fonts are intentionally omitted
+sheet.@Board Name: Board1
+sheet.@Create Date: 2026-08-29
+sheet.@Create Time: 19:17:46
+sheet.@Page Count: 1
+sheet.@Page Name: P1
+sheet.@Page No: 1
+sheet.@Project Name: temp_sensor
+sheet.@Schematic Name: Schematic1
+sheet.@Update Date: 2026-08-29
+sheet.@Update Time: 19:17:46
+sheet.Blade Width: 10
+sheet.Border: 1
+sheet.Company: EasyEDA.com
+sheet.Height: 866.1417322834645
+sheet.Page Size: A4
+sheet.Region Start: 1
+sheet.Title Block Position: 3
+sheet.Version: V1.0
+sheet.Width: 1397.6377952755906
+sheet.X Region Count: 6
+sheet.Y Region Count: 4
+summary: 37 components, 123 pins, 18 nets, 20 unconnected pins
+pin token: REF.PAD[=PINNAME][:TYPE]; TYPE omitted when Passive (EasyEDA exports all pins as Passive, so pin direction is unavailable)
+
+## COMPONENTS
+# REF  val=  fp=  dev=  [mpn/lcsc/mfr]   then attributes, then description
+C1  val=10uF  fp=C0402  dev=FCC0402X106M100AT  pins=2  mfr=FOJAN(富捷)  mpn=FCC0402X106M100AT  lcsc=C7467116
+    LCSC Part Name=10uF ±20% 10V; Operating Temperature=-55℃~+85℃; Temperature Coefficient=X5R;
+    Tolerance=±20%; Voltage Rating=10V;
+    desc: Capacitance:10uF Tolerance:±20% Tolerance:±20% Voltage Rating:10V Temperature Coefficient:X5R Operating Temperature:-55℃~+85℃ Operating Temperature:-55℃~+85℃
+C2  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+C3  val=10uF  fp=C0402  dev=FCC0402X106M100AT  pins=2  mfr=FOJAN(富捷)  mpn=FCC0402X106M100AT  lcsc=C7467116
+    LCSC Part Name=10uF ±20% 10V; Operating Temperature=-55℃~+85℃; Temperature Coefficient=X5R;
+    Tolerance=±20%; Voltage Rating=10V;
+    desc: Capacitance:10uF Tolerance:±20% Tolerance:±20% Voltage Rating:10V Temperature Coefficient:X5R Operating Temperature:-55℃~+85℃ Operating Temperature:-55℃~+85℃
+C4  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+C5  val=10uF  fp=C0402  dev=FCC0402X106M100AT  pins=2  mfr=FOJAN(富捷)  mpn=FCC0402X106M100AT  lcsc=C7467116
+    LCSC Part Name=10uF ±20% 10V; Operating Temperature=-55℃~+85℃; Temperature Coefficient=X5R;
+    Tolerance=±20%; Voltage Rating=10V;
+    desc: Capacitance:10uF Tolerance:±20% Tolerance:±20% Voltage Rating:10V Temperature Coefficient:X5R Operating Temperature:-55℃~+85℃ Operating Temperature:-55℃~+85℃
+C6  val=10uF  fp=C0402  dev=FCC0402X106M100AT  pins=2  mfr=FOJAN(富捷)  mpn=FCC0402X106M100AT  lcsc=C7467116
+    LCSC Part Name=10uF ±20% 10V; Operating Temperature=-55℃~+85℃; Temperature Coefficient=X5R;
+    Tolerance=±20%; Voltage Rating=10V;
+    desc: Capacitance:10uF Tolerance:±20% Tolerance:±20% Voltage Rating:10V Temperature Coefficient:X5R Operating Temperature:-55℃~+85℃ Operating Temperature:-55℃~+85℃
+C7  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+C8  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+C9  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+C10  val=50pF  fp=C0402  dev=CC0402JRNPO9BN500  pins=2  mfr=YAGEO(国巨)  mpn=CC0402JRNPO9BN500  lcsc=C576707
+    LCSC Part Name=50pF ±5% 50V; Temperature Coefficient=NP0; Tolerance=±5%; Voltage Rating=50V;
+    desc: Capacitance:50pF Tolerance:±5% Tolerance:±5% Voltage Rating:50V Temperature Coefficient:NP0
+C11  val=47uF  fp=C1206  dev=TCC1206X6S476M6R3HT  pins=2  mfr=CCTC(三环)  mpn=TCC1206X6S476M6R3HT  lcsc=C53456069
+    LCSC Part Name=47uF ±20% 6.3V; Temperature Coefficient=X6S; Tolerance=±20%;
+    Voltage Rating=6.3V;
+    desc: Capacitance:47uF Tolerance:±20% Tolerance:±20% Voltage Rating:6.3V Temperature Coefficient:X6S
+C12  val=47uF  fp=C1206  dev=TCC1206X6S476M6R3HT  pins=2  mfr=CCTC(三环)  mpn=TCC1206X6S476M6R3HT  lcsc=C53456069
+    LCSC Part Name=47uF ±20% 6.3V; Temperature Coefficient=X6S; Tolerance=±20%;
+    Voltage Rating=6.3V;
+    desc: Capacitance:47uF Tolerance:±20% Tolerance:±20% Voltage Rating:6.3V Temperature Coefficient:X6S
+C13  val=47uF  fp=C1206  dev=TCC1206X6S476M6R3HT  pins=2  mfr=CCTC(三环)  mpn=TCC1206X6S476M6R3HT  lcsc=C53456069
+    LCSC Part Name=47uF ±20% 6.3V; Temperature Coefficient=X6S; Tolerance=±20%;
+    Voltage Rating=6.3V;
+    desc: Capacitance:47uF Tolerance:±20% Tolerance:±20% Voltage Rating:6.3V Temperature Coefficient:X6S
+C14  val=47uF  fp=C1206  dev=TCC1206X6S476M6R3HT  pins=2  mfr=CCTC(三环)  mpn=TCC1206X6S476M6R3HT  lcsc=C53456069
+    LCSC Part Name=47uF ±20% 6.3V; Temperature Coefficient=X6S; Tolerance=±20%;
+    Voltage Rating=6.3V;
+    desc: Capacitance:47uF Tolerance:±20% Tolerance:±20% Voltage Rating:6.3V Temperature Coefficient:X6S
+C15  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mpn=FN15X104K160PNG  lcsc=C328914
+    LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
+    Voltage Rating=16V;
+    desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+J4  val=CB3S1  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  dev=Connector_Generic_Conn_01x03  pins=3
+    desc: Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)
+J5  val=CB3S2  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  dev=Connector_Generic_Conn_01x03  pins=3
+    desc: Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)
+L1  val=470nH  fp=IND-SMD_L5.4-W5.2  dev=MWSA0518S-R47MT  pins=2  mfr=Sunlord(顺络)  mpn=MWSA0518S-R47MT  lcsc=C408341
+    Current - Saturation(Isat)=12A; Current Rating=10.5A; DC Resistance(DCR)=9mΩ;
+    LCSC Part Name=470nH ±20% 12A; Tolerance=±20%; Type=-;
+    desc: Inductance:470nH Tolerance:±20% Tolerance:±20% Current Rating:10.5A Current - Saturation(Isat):12A DC Resistance(DCR):9mΩ Type:-
+program  val=DS1023-1*4S21  fp=HDR-TH_DS1023-1X4S21  pins=4  mfr=CONNFLY  mpn=DS1023-1*4S21  lcsc=C7423131
+    LCSC Part Name=DS1023-1*4S21;
+R1  val=200kΩ  fp=R0402  dev=AR02DTD2003  pins=2  mfr=Viking(光颉)  mpn=AR02DTD2003  lcsc=C319775
+    LCSC Part Name=薄膜电阻 200kΩ ±0.5% 62.5mW; Operating Temperature=-55℃~+155℃; Power(Watts)=62.5mW;
+    Temperature Coefficient=±50ppm/℃; Tolerance=±0.5%; Type=Thin Film Resistor;
+    Voltage-Supply(Max)=25V;
+    desc: Type:Thin Film Resistor Resistance:200kΩ Tolerance:±0.5% Tolerance:±0.5% Power(Watts):62.5mW Voltage-Supply(Max):25V Temperature Coefficient:±50ppm/℃ Tempera...
+R2  val=634kΩ  fp=R0402  dev=0402WGF6343TCE  pins=2  mfr=UNI-ROYAL(厚声)  mpn=0402WGF6343TCE  lcsc=C270588
+    LCSC Part Name=634kΩ ±1% 62.5mW 厚膜电阻; Operating Temperature=-55℃~+155℃; Power(Watts)=62.5mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=50V;
+    desc: Type:Thick Film Resistor Resistance:634kΩ Tolerance:±1% Tolerance:±1% Power(Watts):62.5mW Voltage-Supply(Max):50V Temperature Coefficient:±100ppm/℃ Temperatu...
+R3  val=1kΩ  fp=R0603  dev=FRC0603F1001TS  pins=2  mfr=FOJAN(富捷)  mpn=FRC0603F1001TS  lcsc=C2907002
+    LCSC Part Name=1kΩ ±1% 100mW 厚膜电阻; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=75V;
+    desc: Type:Thick Film Resistor Resistance:1kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature ...
+R4  val=10kΩ  fp=R0402  dev=1RC0402J0103  pins=2  mfr=SAE(世盟/世爱)  mpn=1RC0402J0103  lcsc=C54531014
+    LCSC Part Name=厚膜电阻±5%10KΩ±100ppm/℃; Operating Temperature=-55℃~+155℃; Power(Watts)=62.5mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±5%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=50V;
+    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±5% Tolerance:±5% Power(Watts):62.5mW Voltage-Supply(Max):50V Temperature Coefficient:±100ppm/℃ Temperatur...
+R5  val=1kΩ  fp=R0603  dev=FRC0603F1001TS  pins=2  mfr=FOJAN(富捷)  mpn=FRC0603F1001TS  lcsc=C2907002
+    LCSC Part Name=1kΩ ±1% 100mW 厚膜电阻; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=75V;
+    desc: Type:Thick Film Resistor Resistance:1kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature ...
+Reset  val=Reset  fp=water_tank:SW_PUSH  dev=Switch_SW_Push  pins=2
+    desc: Push button switch, generic, two pins
+SC1  val=1.2V  fp=water_tank:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical  dev=Device_Solar_Cell  pins=2
+    desc: Single solar cell
+TP_3v3  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+TP_PA5  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+TP_uC_V  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+TP_vBatt  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+TP_wifiV  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+U1  val=TPS61021ADSGR  fp=WSON-8_L2.0-W2.0-P0.50-TL-EP  pins=9  mfr=TI(德州仪器)  mpn=TPS61021ADSGR  lcsc=C193037
+    Frequency - Switching=2MHz; Function=Boost type; LCSC Part Name=TPS61021ADSGR;
+    Number of Outputs=1; Operating Temperature=-40℃~+125℃@(TJ); Output Current=3A;
+    Output Type=Adjustable; Output Voltage=1.8V~4V; Quiescent Current=-;
+    Switch tube (built-in/external)=Built-in; Synchronous Rectifier=Yes; Topology=Boost;
+    Voltage - Supply=500mV~4.4V;
+U2  fp=T3-3S-footprint  dev=T3-3S  pins=16
+    desc: Tuya module
+U3  val=HDC3020DEFR  fp=DFN-8_L2.5-W2.5-P0.50-BL-EP  pins=9  mfr=TI(德州仪器)  mpn=HDC3020DEFR  lcsc=C7472806
+    Current - Supply=400nA;
+    Features=Drift/aging compensation；Built-in heater；Low power drive measurement;
+    Humidity=0%RH~100%RH; Humidity Tolerance=±0.5%RH; Interface=I2C;
+    LCSC Part Name=数字式相对湿度传感器，具备长期漂移特性、响应功能、低功耗特性、失调误差校正功能，集成温度传感器; Resolution=16bit;
+    Temperature Range=-40℃~+125℃; Temperature Tolerance=±0.1℃; Voltage - Supply=1.62V~5.5V;
+    desc: Temperature Range:-40℃~+125℃ Temperature Range:-40℃~+125℃ Humidity:0%RH~100%RH Humidity:0%RH~100%RH Interface:I2C Voltage - Supply:1.62V~5.5V Voltage - Suppl...
+U4  val=STM32L010F4P6  fp=TSSOP-20_L6.5-W4.4-P0.65-LS6.4-BL  pins=20  mfr=ST(意法半导体)  mpn=STM32L010F4P6  lcsc=C529415
+    ADC (Bit)=12bit; Core Size=32 Bit; CPU Core=ARM Cortex-M0+; CPU Maximum Speed=32MHz;
+    EEPROM=128Byte; LCSC Part Name=超低功耗超值系列Arm Cortex-M0+ MCU，具有16-KB Flash存储器和32 MHz CPU;
+    Number of I/O=16; Operating Temperature=-40℃~+85℃; Oscillator Type=Built-in;
+    Program Memory Type=FLASH; Program Storage Size=16KB; RAM Size=2KB;
+    Voltage - Supply=1.8V~3.6V;
+    desc: CPU Core:ARM Cortex-M0+ CPU Maximum Speed:32MHz Core Size:32 Bit Program Storage Size:16KB Program Memory Type:FLASH RAM Size:2KB EEPROM:128Byte Number of I/...
+U5  val=TPS22919QDCKRQ1  fp=SC-70-6_L2.0-W1.3-P0.65-LS2.1-BR  pins=6  mfr=TI(德州仪器)  mpn=TPS22919QDCKRQ1  lcsc=C2871558
+    Control Input Logic=Active High;
+    Features=Over Temperature Protection；Short-Circuit  Protection(SCP);
+    LCSC Part Name=5.5V 1.5A 90mΩ 自保护负载开关; Maximum Continuous Current=1.5A; Number of Channels=1;
+    Operating Temperature	-=-40℃~+125℃; RDS(on)=89mΩ; Type=Load Switch;
+    Voltage - Supply=1.6V~5.5V;
+    desc: Type:Load Switch Number of Channels:1 Control Input Logic:Active High Maximum Continuous Current:1.5A Voltage - Supply:1.6V~5.5V Voltage - Supply:1.6V~5.5V R...
+Wifi  val=Wifi  fp=water_tank:SW_PUSH  dev=Switch_SW_Push  pins=2
+    desc: Push button switch, generic, two pins
+
+## NETS
+# name (pin count) then the pins on it
++3v3 (20)
+    C2.2 C3.2 C4.2 C5.2 C9.2 C10.2 C13.2 C14.2 R2.2 R3.2 R5.2 TP_3v3.1 TP_uC_V.1 U1.3=VOUT
+    U1.4=VOUT U3.5=VDD U3.6=RESET# U4.5=VDDA U4.16=VDD U5.1=IN
+adc_batt (10)
+    C1.2 C11.2 C12.2 C15.2 L1.1 SC1.1=+ TP_vBatt.1 U1.5=EN U1.8=VIN U4.12=PA6
+N$C6.2 (6)   [auto-named, no net label in source]
+    C6.2 C7.2 J4.1=Pin_1 TP_wifiV.1 U2.8=VBAT U5.6=VOUT
+N$C10.1 (4)   [auto-named, no net label in source]
+    C10.1 R1.2 R2.1 U1.2=FB
+N$J4.3 (2)   [auto-named, no net label in source]
+    J4.3=Pin_3 U2.3=CEN
+N$L1.2 (3)   [auto-named, no net label in source]
+    L1.2 U1.6=SW U1.7=SW
+N$R4.2 (2)   [auto-named, no net label in source]
+    R4.2 U4.1=PB9-BOOT0
+N$TP_PA5.1 (2)   [auto-named, no net label in source]
+    TP_PA5.1 U4.11=PA5
+N$U4.13 (2)   [auto-named, no net label in source]
+    U4.13=PA7 Wifi.2
+power_GNDREF (30)
+    C1.1 C2.1 C3.1 C4.1 C5.1 C6.1 C7.1 C8.1 C9.1 C11.1 C12.1 C13.1 C14.1 C15.1 J4.2=Pin_2
+    J5.3=Pin_3 program.4 R1.1 R4.1 Reset.1 SC1.2=- U1.1=AGND U1.9=EPAD U2.9=GND U3.2=ADDR
+    U3.7=ADDR1 U3.8=GND U4.15=VSS U5.2=GND Wifi.1
+SCL (3)
+    R3.1 U3.4=SCL U4.17=PA9
+SDA (3)
+    R5.1 U3.1=SDA U4.18=PA10
+SWCLK (2)
+    program.2 U4.20=PA14
+SWDIO (2)
+    program.3 U4.19=PA13
+uC_reset (4)
+    C8.2 program.1 Reset.2 U4.4=NRST
+Wifi_On (2)
+    U4.10=PA4 U5.3=ON
+Wifi_Rx (3)
+    J5.2=Pin_2 U2.15=RX0 U4.9=PA3
+Wifi_Tx (3)
+    J5.1=Pin_1 U2.16=TX0 U4.8=PA2
+
+## PIN MAP  (same data as ## NETS, indexed by component)
+C1  FCC0402X106M100AT
+       1                  -> power_GNDREF
+       2                  -> adc_batt
+C2  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C3  FCC0402X106M100AT
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C4  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C5  FCC0402X106M100AT
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C6  FCC0402X106M100AT
+       1                  -> power_GNDREF
+       2                  -> N$C6.2
+C7  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> N$C6.2
+C8  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> uC_reset
+C9  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C10  CC0402JRNPO9BN500
+       1                  -> N$C10.1
+       2                  -> +3v3
+C11  TCC1206X6S476M6R3HT
+       1                  -> power_GNDREF
+       2                  -> adc_batt
+C12  TCC1206X6S476M6R3HT
+       1                  -> power_GNDREF
+       2                  -> adc_batt
+C13  TCC1206X6S476M6R3HT
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C14  TCC1206X6S476M6R3HT
+       1                  -> power_GNDREF
+       2                  -> +3v3
+C15  FN15X104K160PNG
+       1                  -> power_GNDREF
+       2                  -> adc_batt
+J4  Connector_Generic_Conn_01x03
+       1 Pin_1            -> N$C6.2
+       2 Pin_2            -> power_GNDREF
+       3 Pin_3            -> N$J4.3
+J5  Connector_Generic_Conn_01x03
+       1 Pin_1            -> Wifi_Tx
+       2 Pin_2            -> Wifi_Rx
+       3 Pin_3            -> power_GNDREF
+L1  MWSA0518S-R47MT
+       1                  -> adc_batt
+       2                  -> N$L1.2
+program  DS1023-1*4S21
+       1                  -> uC_reset
+       2                  -> SWCLK
+       3                  -> SWDIO
+       4                  -> power_GNDREF
+R1  AR02DTD2003
+       1                  -> power_GNDREF
+       2                  -> N$C10.1
+R2  0402WGF6343TCE
+       1                  -> N$C10.1
+       2                  -> +3v3
+R3  FRC0603F1001TS
+       1                  -> SCL
+       2                  -> +3v3
+R4  1RC0402J0103
+       1                  -> power_GNDREF
+       2                  -> N$R4.2
+R5  FRC0603F1001TS
+       1                  -> SDA
+       2                  -> +3v3
+Reset  Switch_SW_Push
+       1                  -> power_GNDREF
+       2                  -> uC_reset
+SC1  Device_Solar_Cell
+       1 +                -> adc_batt
+       2 -                -> power_GNDREF
+TP_3v3  Test-Point
+       1                  -> +3v3
+TP_PA5  Test-Point
+       1                  -> N$TP_PA5.1
+TP_uC_V  Test-Point
+       1                  -> +3v3
+TP_vBatt  Test-Point
+       1                  -> adc_batt
+TP_wifiV  Test-Point
+       1                  -> N$C6.2
+U1  TPS61021ADSGR
+       1 AGND             -> power_GNDREF
+       2 FB               -> N$C10.1
+       3 VOUT             -> +3v3
+       4 VOUT             -> +3v3
+       5 EN               -> adc_batt
+       6 SW               -> N$L1.2
+       7 SW               -> N$L1.2
+       8 VIN              -> adc_batt
+       9 EPAD             -> power_GNDREF
+U2  T3-3S
+       1 NC               -> (unconnected)
+       2 ADC              -> (unconnected)
+       3 CEN              -> N$J4.3
+       4 P48              -> (unconnected)
+       5 P24              -> (unconnected)
+       6 P32              -> (unconnected)
+       7 P34              -> (unconnected)
+       8 VBAT             -> N$C6.2
+       9 GND              -> power_GNDREF
+      10 P19              -> (unconnected)
+      11 TX1              -> (unconnected)
+      12 RX1              -> (unconnected)
+      13 P36              -> (unconnected)
+      14 P18              -> (unconnected)
+      15 RX0              -> Wifi_Rx
+      16 TX0              -> Wifi_Tx
+U3  HDC3020DEFR
+       1 SDA              -> SDA
+       2 ADDR             -> power_GNDREF
+       3 ALERT            -> (unconnected)
+       4 SCL              -> SCL
+       5 VDD              -> +3v3
+       6 RESET#           -> +3v3
+       7 ADDR1            -> power_GNDREF
+       8 GND              -> power_GNDREF
+       9 EP               -> (unconnected)
+U4  STM32L010F4P6
+       1 PB9-BOOT0        -> N$R4.2
+       2 PC14-OSC32_IN    -> (unconnected)
+       3 PC15-OSC32_OUT   -> (unconnected)
+       4 NRST             -> uC_reset
+       5 VDDA             -> +3v3
+       6 PA0-CK_IN        -> (unconnected)
+       7 PA1              -> (unconnected)
+       8 PA2              -> Wifi_Tx
+       9 PA3              -> Wifi_Rx
+      10 PA4              -> Wifi_On
+      11 PA5              -> N$TP_PA5.1
+      12 PA6              -> adc_batt
+      13 PA7              -> N$U4.13
+      14 PB1              -> (unconnected)
+      15 VSS              -> power_GNDREF
+      16 VDD              -> +3v3
+      17 PA9              -> SCL
+      18 PA10             -> SDA
+      19 PA13             -> SWDIO
+      20 PA14             -> SWCLK
+U5  TPS22919QDCKRQ1
+       1 IN               -> +3v3
+       2 GND              -> power_GNDREF
+       3 ON               -> Wifi_On
+       4 NC               -> (unconnected)
+       5 QOD              -> (unconnected)
+       6 VOUT             -> N$C6.2
+Wifi  Switch_SW_Push
+       1                  -> power_GNDREF
+       2                  -> N$U4.13
+
+## UNCONNECTED PINS
+    U2.1=NC U2.2=ADC U2.4=P48 U2.5=P24 U2.6=P32 U2.7=P34 U2.10=P19 U2.11=TX1 U2.12=RX1 U2.13=P36
+    U2.14=P18 U3.3=ALERT U3.9=EP U4.2=PC14-OSC32_IN U4.3=PC15-OSC32_OUT U4.6=PA0-CK_IN U4.7=PA1
+    U4.14=PB1 U5.4=NC U5.5=QOD
+
+## SHEET NOTES  (free text placed on the schematic)
+    T3-3S
+
+## FLAGS  (structural hints only -- not an ERC)
+    none

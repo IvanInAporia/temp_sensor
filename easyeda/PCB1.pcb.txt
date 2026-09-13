@@ -1,0 +1,338 @@
+# PCB REVIEW EXPORT
+source: PCB1.pcbdoc
+sha256-12: 07524ad1e4e3
+exporter: eda_review_export.py v1.1
+content: placement, coordinates, stackup, rules and per-net routing summary; silkscreen/assembly art is reduced to counts
+units: mm   (source file is mil)
+origin: board outline lower-left corner   X right, Y up   offset applied = (82.103, 76.2) mm
+summary: 37 components (37 top / 0 bottom), 123 pads, 24 nets, 94 vias, 249 copper track segments (422.277 mm total), 2 copper pours
+note: 40 copper primitives had no net in the file; their net was recovered from what the copper physically touches
+omitted: 278 silkscreen/assembly/dimension primitives, 954 non-copper line primitives
+
+## PARSER WARNINGS
+- 1 pads belong to no component (loose pads placed directly on the board); listed under the designator "(free)"
+
+## BOARD
+outline bbox: 40 x 40 mm   (9 vertices)
+outline: (40,40) (40,0) (0,0) (0,40) (28.999,40) (28.999,30.858) (34,30.858) (34,40) (40,40)
+stackup:
+    Top Paste Mask Layer
+    Top Silkscreen Layer
+    Top Solder Mask Layer   er=3.3 h=0.4mil
+    Top Layer   cu=1.4mil
+    Dielectric1   er=4.5 h=59.4mil
+    Bottom Layer   cu=1.4mil
+    Bottom Solder Mask Layer   er=3.3 h=0.4mil
+    Bottom Silkscreen Layer
+    Bottom Paste Mask Layer
+
+## DESIGN RULES
+# lengths shown in mm
+BoardOutlineClearance "copperThickness1oz": genericclearance=0.254
+BoardOutlineClearance "copperThickness2oz": genericclearance=0.254
+BoardOutlineClearance "otherClearance": genericclearance=0.254
+Clearance "copperThickness1oz": gap=0.178 genericclearance=0.178
+Clearance "copperThickness2oz": gap=0.178 genericclearance=0.178
+Clearance "otherClearance": gap=0.178 genericclearance=0.178
+DiffPairsRouting "differentialPair": maxuncoupledlength=0.254 minlimit=0.152 maxlimit=Infinity mostfreqgap=0.152 toplayer_minwidth=0.127 toplayer_prefwidth=0.254 toplayer_maxwidth=2.54 bottomlayer_minwidth=0.127 bottomlayer_prefwidth=0.254 bottomlayer_maxwidth=2.54
+PasteMaskExpansion "pasteMaskExpansion": expansion=0
+PlaneConnect "innerPlane": planeconnectstyle=Relief reliefexpansion=0.508 reliefentries=4 reliefconductorwidth=0.254 reliefairgap=0.254
+PolygonConnect "copperRegion": connectstyle=Relief reliefentries=4 reliefconductorwidth=0.4 polygonreliefangle=90 Angle airgapwidth=0.254
+RoutingVias "viaSize": viastyle=Through Hole holewidth=0.305 minholewidth=0.3 maxholewidth=6.3 width=0.305 minwidth=0.3 maxwidth=6.3
+SolderMaskExpansion "solderMaskExpansion": priority=2 useseparateexpansions=TRUE expansion=0.051 expansionbottom=0.051
+SolderMaskExpansion "solderMaskExpansion": scope1expression=IsVia useseparateexpansions=TRUE expansion=-25.4 expansionbottom=-25.4
+Width "copperThickness1oz": maxlimit=2.54 minlimit=0.127 preferedwidth=0.254
+Width "copperThickness2oz": maxlimit=2.54 minlimit=0.203 preferedwidth=0.254
+
+## PLACEMENT
+# REF  layer  origin(x,y)  rot  fp  padcount  copper extent [mm]
+C1  TOP  (10.353,4.028)  rot=270  fp=C0402  pads=2
+    extent 0.541 x 1.341  x 10.083..10.624  y 3.359..4.7
+C2  TOP  (26.162,11.781)  rot=0  fp=C0402  pads=2
+    extent 1.341 x 0.541  x 25.493..26.834  y 11.51..12.051
+C3  TOP  (6.68,11.781)  rot=0  fp=C0402  pads=2
+    extent 1.341 x 0.541  x 6.011..7.352  y 11.51..12.051
+C4  TOP  (26.449,21.46)  rot=270  fp=C0402  pads=2
+    extent 0.541 x 1.341  x 26.179..26.72  y 20.791..22.132
+C5  TOP  (26.162,10.353)  rot=0  fp=C0402  pads=2
+    extent 1.341 x 0.541  x 25.493..26.834  y 10.083..10.624
+C6  TOP  (3.112,23.716)  rot=90  fp=C0402  pads=2
+    extent 0.541 x 1.341  x 2.841..3.382  y 23.044..24.385
+C7  TOP  (4.641,23.716)  rot=90  fp=C0402  pads=2
+    extent 0.541 x 1.341  x 4.37..4.911  y 23.044..24.385
+C8  TOP  (27.803,23.485)  rot=270  fp=C0402  pads=2
+    extent 0.541 x 1.341  x 27.532..28.073  y 22.813..24.154
+C9  TOP  (37.79,34.374)  rot=90  fp=C0402  pads=2
+    extent 0.541 x 1.339  x 37.52..38.061  y 33.705..35.043
+C10  TOP  (9.596,14.834)  rot=180  fp=C0402  pads=2
+    extent 1.339 x 0.541  x 8.927..10.265  y 14.563..15.104
+C11  TOP  (12.314,4.676)  rot=270  fp=C1206  pads=2
+    extent 1.727 x 4.671  x 11.45..13.178  y 2.341..7.012
+C12  TOP  (14.981,4.676)  rot=270  fp=C1206  pads=2
+    extent 1.727 x 4.671  x 14.117..15.845  y 2.341..7.012
+C13  TOP  (5.456,16.472)  rot=0  fp=C1206  pads=2
+    extent 4.671 x 1.727  x 3.12..7.791  y 15.608..17.335
+C14  TOP  (5.456,13.82)  rot=0  fp=C1206  pads=2
+    extent 4.671 x 1.727  x 3.12..7.791  y 12.957..14.684
+C15  TOP  (22.032,11.476)  rot=0  fp=C0402  pads=2
+    extent 1.339 x 0.541  x 21.363..22.701  y 11.205..11.746
+J4  TOP  (3.112,32.288)  rot=180  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  pads=3
+    extent 1.699 x 6.779  x 2.262..3.961  y 31.439..38.218
+J5  TOP  (25.799,37.338)  rot=0  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  pads=3
+    extent 1.699 x 6.779  x 24.949..26.648  y 31.408..38.188
+L1  TOP  (6.828,4.801)  rot=270  fp=IND-SMD_L5.4-W5.2  pads=2
+    extent 2.499 x 5.999  x 5.578..8.077  y 1.801..7.8
+program  TOP  (32.436,16.627)  rot=270  fp=HDR-TH_DS1023-1X4S21  pads=4
+    extent 1.6 x 9.22  x 31.636..33.236  y 12.017..21.237
+R1  TOP  (9.596,12.04)  rot=180  fp=R0402  pads=2
+    extent 1.43 x 0.541  x 8.881..10.311  y 11.769..12.31
+R2  TOP  (9.596,13.437)  rot=180  fp=R0402  pads=2
+    extent 1.43 x 0.541  x 8.881..10.311  y 13.166..13.707
+R3  TOP  (36.975,31.57)  rot=0  fp=R0603  pads=2
+    extent 2.314 x 0.864  x 35.819..38.133  y 31.138..32.001
+R4  TOP  (29.121,21.572)  rot=270  fp=R0402  pads=2
+    extent 0.541 x 1.433  x 28.851..29.392  y 20.857..22.29
+R5  TOP  (35.75,22.032)  rot=0  fp=R0603  pads=2
+    extent 2.314 x 0.864  x 34.595..36.909  y 21.6..22.464
+Reset  TOP  (37.127,26.876)  rot=180  fp=water_tank:SW_PUSH  pads=2
+    extent 6.8 x 1.6  x 31.128..37.927  y 26.076..27.676
+SC1  TOP  (22.184,4.13)  rot=0  fp=water_tank:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical  pads=2
+    extent 4.201 x 1.699  x 21.335..25.536  y 3.28..4.98
+TP_3v3  TOP  (11.527,17.953)  rot=0  fp=HDR-TH_1P-P2.54-V-F  pads=1
+    extent 1.6 x 1.6  x 10.726..12.327  y 17.153..18.753
+TP_PA5  TOP  (21.115,14.638)  rot=0  fp=HDR-TH_1P-P2.54-V-F  pads=1
+    extent 1.6 x 1.6  x 20.315..21.915  y 13.838..15.438
+TP_uC_V  TOP  (25.959,24.379)  rot=0  fp=HDR-TH_1P-P2.54-V-F  pads=1
+    extent 1.6 x 1.6  x 25.159..26.759  y 23.579..25.179
+TP_vBatt  TOP  (22.339,8.11)  rot=0  fp=HDR-TH_1P-P2.54-V-F  pads=1
+    extent 1.6 x 1.6  x 21.539..23.139  y 7.31..8.91
+TP_wifiV  TOP  (3.061,26.571)  rot=0  fp=HDR-TH_1P-P2.54-V-F  pads=1
+    extent 1.6 x 1.6  x 2.261..3.861  y 25.771..27.371
+U1  TOP  (7.724,9.611)  rot=270  fp=WSON-8_L2.0-W2.0-P0.50-TL-EP  pads=9
+    extent 1.75 x 2.421  x 6.848..8.598  y 8.401..10.822
+U2  TOP  (14.351,31.496)  rot=0  fp=T3-3S-footprint  pads=16
+    extent 17.201 x 15.1  x 5.751..22.951  y 23.946..39.046
+U3  TOP  (36.67,36.873)  rot=270  fp=DFN-8_L2.5-W2.5-P0.50-BL-EP  pads=8
+    extent 3.101 x 1.748  x 35.118..38.219  y 35.999..37.747
+U4  TOP  (26.192,16.477)  rot=180  fp=TSSOP-20_L6.5-W4.4-P0.65-LS6.4-BL  pads=20
+    extent 6.213 x 7.483  x 23.087..29.3  y 12.736..20.218
+U5  TOP  (5.611,19.891)  rot=0  fp=SC-70-6_L2.0-W1.3-P0.65-LS2.1-BR  pads=6
+    extent 2.499 x 1.72  x 4.361..6.861  y 19.031..20.751
+Wifi  TOP  (37.076,5.405)  rot=180  fp=water_tank:SW_PUSH  pads=2
+    extent 6.8 x 1.6  x 31.077..37.876  y 4.605..6.205
+
+## PADS
+# REF.PAD  net  (x,y)  size  shape  layer  [hole]   [mm]
+(free).1  (no net)  (15.146,11.425)  2.4x2.4  ROUND  MULTILAYER  hole=2.4(NPTH)
+C1.1  power_GNDREF  (10.353,4.45)  0.5x0.541  RECTANGLE  TOP  rot=270
+C1.2  adc_batt  (10.353,3.609)  0.5x0.541  RECTANGLE  TOP  rot=270
+C2.1  power_GNDREF  (25.743,11.781)  0.5x0.541  RECTANGLE  TOP
+C2.2  +3v3  (26.584,11.781)  0.5x0.541  RECTANGLE  TOP
+C3.1  power_GNDREF  (6.261,11.781)  0.5x0.541  RECTANGLE  TOP
+C3.2  +3v3  (7.102,11.781)  0.5x0.541  RECTANGLE  TOP
+C4.1  power_GNDREF  (26.449,21.882)  0.5x0.541  RECTANGLE  TOP  rot=270
+C4.2  +3v3  (26.449,21.041)  0.5x0.541  RECTANGLE  TOP  rot=270
+C5.1  power_GNDREF  (25.743,10.353)  0.5x0.541  RECTANGLE  TOP
+C5.2  +3v3  (26.584,10.353)  0.5x0.541  RECTANGLE  TOP
+C6.1  power_GNDREF  (3.112,23.294)  0.5x0.541  RECTANGLE  TOP  rot=90
+C6.2  $1N30  (3.112,24.135)  0.5x0.541  RECTANGLE  TOP  rot=90
+C7.1  power_GNDREF  (4.641,23.294)  0.5x0.541  RECTANGLE  TOP  rot=90
+C7.2  $1N30  (4.641,24.135)  0.5x0.541  RECTANGLE  TOP  rot=90
+C8.1  power_GNDREF  (27.803,23.904)  0.5x0.541  RECTANGLE  TOP  rot=270
+C8.2  uC_reset  (27.803,23.063)  0.5x0.541  RECTANGLE  TOP  rot=270
+C9.1  power_GNDREF  (37.79,33.955)  0.5x0.541  RECTANGLE  TOP  rot=90
+C9.2  +3v3  (37.79,34.793)  0.5x0.541  RECTANGLE  TOP  rot=90
+C10.1  $1N51  (10.015,14.834)  0.5x0.541  RECTANGLE  TOP  rot=180
+C10.2  +3v3  (9.177,14.834)  0.5x0.541  RECTANGLE  TOP  rot=180
+C11.1  power_GNDREF  (12.314,6.269)  1.486x1.727  RECTANGLE  TOP  rot=270
+C11.2  adc_batt  (12.314,3.084)  1.486x1.727  RECTANGLE  TOP  rot=270
+C12.1  power_GNDREF  (14.981,6.269)  1.486x1.727  RECTANGLE  TOP  rot=270
+C12.2  adc_batt  (14.981,3.084)  1.486x1.727  RECTANGLE  TOP  rot=270
+C13.1  power_GNDREF  (3.863,16.472)  1.486x1.727  RECTANGLE  TOP
+C13.2  +3v3  (7.049,16.472)  1.486x1.727  RECTANGLE  TOP
+C14.1  power_GNDREF  (3.863,13.82)  1.486x1.727  RECTANGLE  TOP
+C14.2  +3v3  (7.049,13.82)  1.486x1.727  RECTANGLE  TOP
+C15.1  power_GNDREF  (21.613,11.476)  0.5x0.541  RECTANGLE  TOP
+C15.2  adc_batt  (22.451,11.476)  0.5x0.541  RECTANGLE  TOP
+J4.1  $1N30  (3.112,32.288)  1.699x1.699  RECTANGLE  MULTILAYER  rot=180  hole=1.001
+J4.2  power_GNDREF  (3.112,34.828)  1.699x1.699  ROUND  MULTILAYER  rot=180  hole=1.001
+J4.3  $1N45  (3.112,37.368)  1.699x1.699  ROUND  MULTILAYER  rot=180  hole=1.001
+J5.1  Wifi_Tx  (25.799,37.338)  1.699x1.699  RECTANGLE  MULTILAYER  hole=1.001
+J5.2  Wifi_Rx  (25.799,34.798)  1.699x1.699  ROUND  MULTILAYER  hole=1.001
+J5.3  power_GNDREF  (25.799,32.258)  1.699x1.699  ROUND  MULTILAYER  hole=1.001
+L1.1  adc_batt  (6.828,2.751)  1.9x2.499  RECTANGLE  TOP  rot=270
+L1.2  $1N61  (6.828,6.85)  1.9x2.499  RECTANGLE  TOP  rot=270
+program.1  uC_reset  (32.436,20.437)  1.6x1.6  RECTANGLE  MULTILAYER  rot=270  hole=1.001
+program.2  SWCLK  (32.436,17.897)  1.6x1.6  ROUND  MULTILAYER  rot=270  hole=1.001
+program.3  SWDIO  (32.436,15.357)  1.6x1.6  ROUND  MULTILAYER  rot=270  hole=1.001
+program.4  power_GNDREF  (32.436,12.817)  1.6x1.6  ROUND  MULTILAYER  rot=270  hole=1.001
+R1.1  power_GNDREF  (10.028,12.04)  0.566x0.541  RECTANGLE  TOP  rot=180
+R1.2  $1N51  (9.164,12.04)  0.566x0.541  RECTANGLE  TOP  rot=180
+R2.1  $1N51  (10.028,13.437)  0.566x0.541  RECTANGLE  TOP  rot=180
+R2.2  +3v3  (9.164,13.437)  0.566x0.541  RECTANGLE  TOP  rot=180
+R3.1  SCL  (36.223,31.57)  0.808x0.864  RECTANGLE  TOP
+R3.2  +3v3  (37.729,31.57)  0.808x0.864  RECTANGLE  TOP
+R4.1  power_GNDREF  (29.121,22.007)  0.566x0.541  RECTANGLE  TOP  rot=270
+R4.2  $1N39  (29.121,21.14)  0.566x0.541  RECTANGLE  TOP  rot=270
+R5.1  SDA  (34.999,22.032)  0.808x0.864  RECTANGLE  TOP
+R5.2  +3v3  (36.505,22.032)  0.808x0.864  RECTANGLE  TOP
+Reset.1  power_GNDREF  (37.127,26.876)  1.6x1.6  RECTANGLE  MULTILAYER  rot=270  hole=0.8
+Reset.2  uC_reset  (31.928,26.876)  1.6x1.6  ROUND  MULTILAYER  rot=270  hole=0.8
+SC1.1  adc_batt  (22.184,4.13)  1.699x1.699  ROUNDEDRECTANGLE  MULTILAYER  hole=0.8
+SC1.2  power_GNDREF  (24.686,4.13)  1.699x1.699  ROUND  MULTILAYER  hole=0.8
+TP_3v3.1  +3v3  (11.527,17.953)  1.6x1.6  ROUND  MULTILAYER  hole=1.001
+TP_PA5.1  $1N80  (21.115,14.638)  1.6x1.6  ROUND  MULTILAYER  hole=1.001
+TP_uC_V.1  +3v3  (25.959,24.379)  1.6x1.6  ROUND  MULTILAYER  hole=1.001
+TP_vBatt.1  adc_batt  (22.339,8.11)  1.6x1.6  ROUND  MULTILAYER  hole=1.001
+TP_wifiV.1  $1N30  (3.061,26.571)  1.6x1.6  ROUND  MULTILAYER  hole=1.001
+U1.1  power_GNDREF  (8.473,10.561)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.2  $1N51  (7.973,10.561)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.3  +3v3  (7.473,10.561)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.4  +3v3  (6.972,10.561)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.5  adc_batt  (6.972,8.661)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.6  $1N61  (7.473,8.661)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.7  $1N61  (7.973,8.661)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.8  adc_batt  (8.473,8.661)  0.521x0.249  RECTANGLE  TOP  rot=270
+U1.9  power_GNDREF  (7.724,9.611)  0.899x1.6  RECTANGLE  TOP  rot=270
+U2.1  (no net)  (6.85,38.496)  2.2x1.1  RECTANGLE  TOP
+U2.2  (no net)  (6.85,36.497)  2.2x1.1  RECTANGLE  TOP
+U2.3  $1N45  (6.85,34.496)  2.2x1.1  RECTANGLE  TOP
+U2.4  (no net)  (6.85,32.497)  2.2x1.1  RECTANGLE  TOP
+U2.5  (no net)  (6.85,30.495)  2.2x1.1  RECTANGLE  TOP
+U2.6  (no net)  (6.85,28.496)  2.2x1.1  RECTANGLE  TOP
+U2.7  (no net)  (6.85,26.495)  2.2x1.1  RECTANGLE  TOP
+U2.8  $1N30  (6.85,24.496)  2.2x1.1  RECTANGLE  TOP
+U2.9  power_GNDREF  (21.852,24.496)  2.2x1.1  RECTANGLE  TOP
+U2.10  (no net)  (21.852,26.495)  2.2x1.1  RECTANGLE  TOP
+U2.11  (no net)  (21.852,28.496)  2.2x1.1  RECTANGLE  TOP
+U2.12  (no net)  (21.852,30.495)  2.2x1.1  RECTANGLE  TOP
+U2.13  (no net)  (21.852,32.497)  2.2x1.1  RECTANGLE  TOP
+U2.14  (no net)  (21.852,34.496)  2.2x1.1  RECTANGLE  TOP
+U2.15  Wifi_Rx  (21.852,36.497)  2.2x1.1  RECTANGLE  TOP
+U2.16  Wifi_Tx  (21.852,38.496)  2.2x1.1  RECTANGLE  TOP
+U3.1  SDA  (35.469,37.622)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.2  power_GNDREF  (35.469,37.122)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.3  (no net)  (35.469,36.624)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.4  SCL  (35.469,36.124)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.5  +3v3  (37.869,36.124)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.6  +3v3  (37.869,36.624)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.7  power_GNDREF  (37.869,37.122)  0.249x0.701  RECTANGLE  TOP  rot=270
+U3.8  power_GNDREF  (37.869,37.622)  0.249x0.701  RECTANGLE  TOP  rot=270
+U4.1  $1N39  (29.119,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.2  (no net)  (28.468,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.3  (no net)  (27.818,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.4  uC_reset  (27.168,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.5  +3v3  (26.518,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.6  (no net)  (25.867,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.7  (no net)  (25.217,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.8  Wifi_Tx  (24.569,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.9  Wifi_Rx  (23.919,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.10  Wifi_On  (23.269,19.347)  0.363x1.742  ROUND  TOP  rot=180
+U4.11  $1N80  (23.269,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.12  adc_batt  (23.919,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.13  $1N79  (24.569,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.14  (no net)  (25.217,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.15  power_GNDREF  (25.867,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.16  +3v3  (26.518,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.17  SCL  (27.168,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.18  SDA  (27.818,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.19  SWDIO  (28.468,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U4.20  SWCLK  (29.119,13.607)  0.363x1.742  ROUND  TOP  rot=180
+U5.1  +3v3  (6.561,19.24)  0.419x0.599  RECTANGLE  TOP  rot=90
+U5.2  power_GNDREF  (6.561,19.891)  0.419x0.599  RECTANGLE  TOP  rot=90
+U5.3  Wifi_On  (6.561,20.541)  0.419x0.599  RECTANGLE  TOP  rot=90
+U5.4  (no net)  (4.661,20.541)  0.419x0.599  RECTANGLE  TOP  rot=270
+U5.5  (no net)  (4.661,19.891)  0.419x0.599  RECTANGLE  TOP  rot=270
+U5.6  $1N30  (4.661,19.24)  0.419x0.599  RECTANGLE  TOP  rot=270
+Wifi.1  power_GNDREF  (37.076,5.405)  1.6x1.6  RECTANGLE  MULTILAYER  rot=270  hole=0.8
+Wifi.2  $1N79  (31.877,5.405)  1.6x1.6  ROUND  MULTILAYER  rot=270  hole=0.8
+
+## NETS
+# name (pad count) [aka ...]: pads, then a routing summary
+# "aka" means the file holds several net objects that copper proves are one net
+$1N30 (6)
+    C6.2 C7.2 J4.1 TP_wifiV.1 U2.8 U5.6
+    routing: copper TOP 15.583 mm; width 0.599/0.8; *** 3 disconnected copper islands -> 2 airwire(s) ***
+$1N39 (2)
+    R4.2 U4.1
+    routing: copper TOP 1.794 mm; width 0.254
+$1N45 (2)
+    J4.3 U2.3
+    routing: copper TOP 4.897 mm; width 0.254
+$1N51 (4)
+    C10.1 R1.2 R2.1 U1.2
+    routing: copper TOP 5.114 mm; width 0.201/0.254
+$1N61 (3)
+    L1.2 U1.6 U1.7
+    routing: *** 3 disconnected copper islands -> 2 airwire(s) ***
+$1N79 (2)
+    U4.13 Wifi.2
+    routing: copper BOTTOM 1.346, TOP 12.746 mm; width 0.254; vias 2
+$1N80 (2)
+    TP_PA5.1 U4.11
+    routing: copper TOP 2.549 mm; width 0.254
++3v3 (20)   aka +3V3
+    C2.2 C3.2 C4.2 C5.2 C9.2 C10.2 C13.2 C14.2 R2.2 R3.2 R5.2 TP_3v3.1 TP_uC_V.1 U1.3 U1.4 U3.5
+    U3.6 U4.5 U4.16 U5.1
+    routing: copper TOP 81.585 mm; width 0.254/0.35/0.399/0.45/0.5; *** 10 disconnected copper islands -> 9 airwire(s) ***
+adc_batt (10)   aka ADC_BATT
+    C1.2 C11.2 C12.2 C15.2 L1.1 SC1.1 TP_vBatt.1 U1.5 U1.8 U4.12
+    routing: copper BOTTOM 2.04, TOP 45.399 mm; width 0.254/0.899; vias 1; *** 5 disconnected copper islands -> 4 airwire(s) ***
+power_GNDREF (30)   aka POWER_GNDREF
+    C1.1 C2.1 C3.1 C4.1 C5.1 C6.1 C7.1 C8.1 C9.1 C11.1 C12.1 C13.1 C14.1 C15.1 J4.2 J5.3 program.4
+    R1.1 R4.1 Reset.1 SC1.2 U1.1 U1.9 U2.9 U3.2 U3.7 U3.8 U4.15 U5.2 Wifi.1
+    routing: copper BOTTOM 43.192, TOP 34.719 mm; width 0.254/0.399/0.45/0.599; vias 91; pour BOTTOM+TOP
+SCL (3)
+    R3.1 U3.4 U4.17
+    routing: copper TOP 36.526 mm; width 0.201
+SDA (3)
+    R5.1 U3.1 U4.18
+    routing: copper TOP 35.465 mm; width 0.201
+SWCLK (2)
+    program.2 U4.20
+    routing: copper TOP 7.106 mm; width 0.254
+SWDIO (2)
+    program.3 U4.19
+    routing: copper TOP 7.222 mm; width 0.254
+uC_reset (4)   aka UC_RESET
+    C8.2 program.1 Reset.2 U4.4
+    routing: copper TOP 14.397 mm; width 0.254
+Wifi_On (2)
+    U4.10 U5.3
+    routing: copper TOP 17.171 mm; width 0.254
+Wifi_Rx (3)   aka WIFI_RX
+    J5.2 U2.15 U4.9
+    routing: copper TOP 22.756 mm; width 0.254
+Wifi_Tx (3)   aka WIFI_TX
+    J5.1 U2.16 U4.8
+    routing: copper TOP 30.667 mm; width 0.254
+
+## COPPER POURS
+POWER_GNDREF  TOP  Solid  bbox x 0..40 y 0..40
+POWER_GNDREF  BOTTOM  Solid  bbox x 0..40 y 0..40.035
+
+## VIAS
+# count  DIAMETER  HOLESIZE  layer span   [mm]
+# reported verbatim: EasyEDA writes DIAMETER smaller than HOLESIZE, so which field is the pad and which is the drill is not decidable from the file -- read them as the pair {0.3, 0.6} mm, not as labelled
+   94  0.61  0.305  TOP-BOTTOM
+
+## KEEPOUTS
+Region  KEEPOUT  x 10.35..18.352  y 28.397..40.396
+Track  KEEPOUT  x 40..40  y 0..40
+Track  KEEPOUT  x 0..40  y 0..0
+Track  KEEPOUT  x 0..0  y 0..40
+Track  KEEPOUT  x 0..28.999  y 40..40
+Track  KEEPOUT  x 28.999..28.999  y 30.858..40
+Track  KEEPOUT  x 28.999..34  y 30.858..30.858
+Track  KEEPOUT  x 34..34  y 30.858..40
+Track  KEEPOUT  x 34..40  y 40..40
+
+## FLAGS  (structural hints only -- not a DRC)
+- net $1N30: pads sit on 3 separate copper islands -- 2 connection(s) still unrouted
+- net $1N61: 3 pads but no copper -- unrouted
+- net +3v3: pads sit on 10 separate copper islands -- 9 connection(s) still unrouted
+- net adc_batt: pads sit on 5 separate copper islands -- 4 connection(s) still unrouted
+- 6 nets exist as several net objects that copper proves are one net, differing only in case -- the PCB net table is out of sync with the schematic: +3v3 = +3V3; Wifi_Rx = WIFI_RX; Wifi_Tx = WIFI_TX; adc_batt = ADC_BATT; power_GNDREF = POWER_GNDREF; uC_reset = UC_RESET
+- copper pours are exported as outlines only, so pads a pour connects are not verified here; nets with a pour are exempt from the island check above
+- 20 pads with no net: (free).1@(15.146,11.425) U2.1 U2.2 U2.4 U2.5 U2.6 U2.7 U2.10 U2.11 U2.12 U2.13 U2.14 U3.3 U4.2 U4.3 U4.6 U4.7 U4.14 U5.4 U5.5
+- narrowest copper track: 0.201 mm (compare against the Width rule above)
