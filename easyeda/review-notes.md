@@ -9,8 +9,8 @@ this" list.
 | | |
 |---|---|
 | Design | temp_sensor v2 (EasyEDA Pro) |
-| Reviewed against | `P1.schdoc` sha256[:12] `c60022f58cd2`, `PCB1.pcbdoc` sha256[:12] `1b172970e7c4` |
-| Last updated | 2026-09-05 |
+| Reviewed against | `P1.schdoc` sha256[:12] `fa324c6c4f47`, `PCB1.pcbdoc` sha256[:12] `8a2e19924876` |
+| Last updated | 2026-09-20 (pre-production pass, 10-off PCBA) |
 
 Datasheet summaries referenced below live in [`../docs/`](../docs/).
 
@@ -46,7 +46,8 @@ All four are routed with net-assigned `Region` fills:
 
 Re-running connectivity with fills folded into the island graph (tracks + vias + pads +
 fills, width-aware contact) gives **one island per net, 0 airwires**. There are no copper
-arcs, so nothing else is being missed. Re-verified on revision `1b172970e7c4`.
+arcs, so nothing else is being missed. Re-verified on revision `8a2e19924876`: all 18 nets,
+0 airwires, and the same four nets still produce the same four bogus flags.
 
 Fold the two solid **pours** in as copper as well, not just the `Region` fills. Pours are
 likewise exported as outlines only, so without them `power_GNDREF` fragments into 23
@@ -114,11 +115,20 @@ wrong.
 
 `ruleState: "DEFAULT"` means clearance was never customised — it is EasyEDA's stock 6 mil.
 
-**Settled consequence:** the tightest clearance on the board is **6.25 mil**, where the
-`+3V3` rail threads between three vias at y = 3373.5 mil (`$1N79` ×2, `adc_batt`). Arithmetic
-in native mils: 26.1 centre-to-centre − 12 via radius − 7.85 half track width = 6.25. That
-**passes** the 6 mil rule and is comfortable for any fab (JLCPCB standard is 5 mil at 1 oz).
-Not a defect — just the spot with the least margin.
+**Settled consequence:** a full pairwise clearance sweep of revision `8a2e19924876`
+(tracks, vias, pads and net-assigned fills; pours excluded because EasyEDA re-pours them with
+clearance) finds **0 violations of the 6 mil rule**. The three tightest pairs are:
+
+| Gap | Pair | Layer |
+|---|---|---|
+| **6.21 mil** | `U4.11` pad (`$1N80`, PA5) ↔ `adc_batt` track | TOP |
+| 7.50 mil | `U1.2` pad (`$1N51`, FB) ↔ `+3V3` fill | TOP |
+| 7.88 mil | `U1.5` pad (`adc_batt`, EN) ↔ `$1N61` fill | TOP |
+
+The 6.25 mil `+3V3`/via spot named in earlier revisions of this note is no longer the
+minimum — R3/R5 moved and the spacing opened up. 6.21 mil **passes** and is comfortable for
+any fab (JLCPCB standard is 5 mil at 1 oz). Not a defect — just the spot with the least
+margin.
 
 ---
 
@@ -163,7 +173,7 @@ net, reassign the net **from the dropdown** in Properties, then re-run the updat
 empty net object is dropped. Typing a name that differs only in case is what creates a second
 net object in the first place.
 
-### 2.2 `N copper primitives had no net in the file` (36 in this revision, was 40)
+### 2.2 `N copper primitives had no net in the file` (52 in `8a2e19924876`, was 36, was 40)
 
 Exporter note, not a design problem — it recovers the net from what the copper physically
 touches. Related to the fill-region handling in §1.1.
@@ -192,11 +202,14 @@ which is this design's job. Intentional.
 
 Verified geometrically against the pour outlines:
 
-- Board outline has a routing notch at x 29.0–34.0, y 30.9–40.0, putting U3 on a peninsula
-  fed by a ~6 mm neck.
+- Board outline has a routing notch at x 29.0–34.0, y **30.196**–40.0, putting U3 on a
+  peninsula fed by a ~6 mm neck. **The notch was deepened from y 30.858 to y 30.196 in
+  revision `8a2e19924876`; both pour outlines were moved with it**, so the relationship below
+  still holds — but any note quoting 30.858 is stale.
 - **Both the top and bottom GND pours are excluded from the sensor tab.** This one *is*
-  provable from the file: both pour outlines step in to `y ≤ 30.858` for `x > 28.999`, so
-  the whole tab is outside them. Confirmed again by the fact that U3.2/7/8 and C9.1 are the
+  provable from the file: both pour outlines step in to `y ≤ 30.196` for `x > 28.999`, so
+  the whole tab is outside them. Re-verified point-in-polygon on `8a2e19924876`: U3.1–U3.8
+  and C9.1/C9.2 are all outside both pour outlines. Confirmed again by the fact that U3.2/7/8 and C9.1 are the
   only GND pads not enclosed by a pour outline (§1.1). Matches datasheet §7.2 rule 2
   ("eliminate copper layers below the device") and rule 3 (slots/cutout).
 - The tab is fed by discrete traces, not by plane copper.
@@ -204,14 +217,26 @@ Verified geometrically against the pour outlines:
   component close to the device is the supply bypass capacitor").
 
 **Correction (2026-09-05):** an earlier revision of this note claimed the tab is fed by
-"four discrete traces only (SDA, SCL, +3V3, GND)". That undercounts. The neck actually
-carries ~2.3 mm of total copper width: SDA 0.201, SCL 0.201, +3V3 0.399 on TOP, plus **three
-GND runs on BOTTOM** (0.45, 0.599, 0.45). One of them —
-(36.363, 37.122) → (34.927, 35.690), 0.45 mm — passes **directly under the U3 body** for
-~1.3 mm, which is the copper-below-the-device that §7.2 rule 2 asks you to eliminate.
+"four discrete traces only (SDA, SCL, +3V3, GND)". That undercounts.
+
+**Re-measured on `8a2e19924876` (2026-09-20).** Copper crossing y = 30.196 mm, x 34–40:
+
+| Layer | Net | Width | Crosses at x |
+|---|---|---|---|
+| TOP | SDA | 0.201 mm | 34.783 |
+| TOP | SCL | 0.201 mm | 35.750 |
+| TOP | +3V3 | 0.399 mm | 38.504 |
+| BOTTOM | GND | 0.320 mm | 34.783 |
+| BOTTOM | GND | 0.450 mm | 37.790 |
+| BOTTOM | GND | 0.500 mm | 38.910 |
+
+Total **2.070 mm** of copper through the neck (TOP 0.800 + BOTTOM 1.270), down from ~2.3 mm.
+Copper still runs under the package body: **0.944 mm on BOTTOM** (two GND segments, 0.320 mm
+wide, down from a single 0.45 mm run of ~1.3 mm) plus 2.500 mm on TOP, which is unavoidable
+since the pads are there.
 
 Only the pour exclusion is settled. The neck copper inventory is **not** settled and is
-tracked as an open nit, not here.
+tracked as an open nit, not here — but it moved in the right direction.
 
 ### 3.4 I2C pull-ups R3 / R5 = 10 kΩ — settled, do not change again
 
@@ -274,12 +299,24 @@ ceramic. A 0.1 µF at VIN/PGND would match datasheet §9.4, but nothing depends 
 
 ## 5. Load switch — TPS22919 (U5)
 
-### 5.1 No external pull-down on ON is required
+### 5.1 The ON pull-down (R6) is optional — it is now fitted, and that is fine either way
 
-The TPS22919 has an internal **smart pull-down** on the ON pin, which holds it low while the
-driver is high-impedance. STM32 I/Os are analog inputs during and after reset, so PA4 floats
-through reset — the smart pull-down covers exactly that case. **Do not add a pull-down
-resistor**; this has been raised and dismissed before.
+**Superseded 2026-09-20.** Earlier revisions of this note said "do not add a pull-down
+resistor". **R6 (10 kΩ, 0603, C98220) was added on `Wifi_On` in `fa324c6c4f47`** and is
+present on the board at (9.180, 20.094). Leave it.
+
+The original reasoning still stands — the TPS22919 has an internal **smart pull-down** on the
+ON pin that holds it low while the driver is high-impedance, and STM32 I/Os are analog inputs
+during and after reset, so the internal pull-down already covers the float-through-reset case.
+R6 is therefore redundant, not wrong.
+
+It is also free in the only place that matters. R6 draws **0 A while the Wi-Fi is off**
+(PA4 low) and 3.3 V / 10 kΩ = **330 µA only while PA4 is high** — i.e. only while the T3-3S
+is already drawing 50–350 mA. Against the boost's 17 µA quiescent draw and the 3.97 µA burnt
+continuously by the R1/R2 feedback divider, it changes nothing in the sleep budget.
+
+So: **don't add a second one, and don't remove this one.** Both states are defensible; the
+board is built with it.
 
 ### 5.2 QOD (5) and NC (4) unconnected
 
@@ -316,13 +353,14 @@ so PA9 is the only MCO pin — not used here.
 Required — the datasheet mandates they come from the same source within 300 mV, and there is
 no separate VSSA pin on TSSOP20 (VSSA is internally bonded to VSS, pin 15).
 
-### 6.4 R3 / R4 / R5 are deliberately the same part
+### 6.4 R3 / R4 / R5 / R6 are deliberately the same part
 
-All three are now **YAGEO RC0603FR-0710KL, 10 kΩ ±1% 0603, LCSC C98220**. R3/R5 are the I2C
-pull-ups (§3.4) and R4 is the BOOT0 pull-down (§6.2); they share a value and a footprint
-purely to cut a line from the BOM and a reel from assembly. The 0402→0603 change on R4 and
-the 1 kΩ→10 kΩ change on R3/R5 are the same decision, not two unrelated edits. Don't
-"optimise" one of them back to a different part.
+All **four** are now **YAGEO RC0603FR-0710KL, 10 kΩ ±1% 0603, LCSC C98220**. R3/R5 are the
+I2C pull-ups (§3.4), R4 is the BOOT0 pull-down (§6.2) and **R6 is the `Wifi_On` pull-down
+(§5.1, added 2026-09-20)**; they share a value and a footprint purely to cut a line from the
+BOM and a reel from assembly. The 0402→0603 change on R4 and the 1 kΩ→10 kΩ change on R3/R5
+are the same decision, not two unrelated edits. Don't "optimise" one of them back to a
+different part — one reel now covers four placements.
 
 ---
 
@@ -330,8 +368,9 @@ the 1 kΩ→10 kΩ change on R3/R5 are the same decision, not two unrelated edit
 
 ### 7.1 Antenna keep-out — no tracks, vias or pads; the pour must be confirmed in EasyEDA
 
-The keep-out `Region` is declared at x 10.35–18.35, y 28.40–40.40. Point-in-polygon tests
-confirm **no track, via or pad** lies inside it. That much is settled.
+The keep-out `Region` is declared at x 10.351–18.351, y 28.397–40.396 (8.00 × 12.00 mm) and
+belongs to the U2 footprint, so it moves with the module. Re-verified on `8a2e19924876`:
+**no track, via, pad or net-assigned fill intersects it — 0 hits.** That much is settled.
 
 **Correction (2026-09-05):** an earlier revision of this note claimed the tests also showed
 "no copper on either the top or bottom pour". That claim was unsound — both pour *outlines*
@@ -368,11 +407,92 @@ the net name — `U4.9`/`PA3` must sit with `U2.16`/`TX0`.
 
 J5 pins 1 and 2 swapped with this change, so **any bench notes or jumper harness made before
 `c60022f58cd2` are now wrong.** J5 carries no pin labels on silkscreen (only the designator);
-pin 1 is identifiable solely by its square pad.
+pin 1 is identifiable solely by its square pad — confirmed in copper on `8a2e19924876`
+(J5.1 is `RECTANGLE`, J5.2/J5.3 are `ROUND`).
+
+**Re-confirmed correct on `fa324c6c4f47` (2026-09-20)** against the TSSOP20 pinout in
+[`../docs/microcontroller/stm32l010f4-tssop20.md`](../docs/microcontroller/stm32l010f4-tssop20.md):
+pin 8 = PA2 = USART2_TX (AF4) sits on `Wifi_Tx` with U2.15/RX0, and pin 9 = PA3 = USART2_RX
+(AF4) sits on `Wifi_Rx` with U2.16/TX0. Note that the *exported* netlist snapshot in
+`P1.sch.txt` dated 2026-09-05 (sha `81829856c3c5`) still shows the **old, broken** straight-
+through wiring; that file is a stale artifact, not the design. Regenerate it before reading it.
 
 ---
 
-## 8. Summary of intentionally unconnected pins
+## 8. Fabrication / DFM — swept clean on `8a2e19924876` (2026-09-20)
+
+A full geometric sweep was run for the 10-off PCBA order. All of this **passed** and does not
+need re-running unless the board changes:
+
+| Check | Rule | Result |
+|---|---|---|
+| Copper-to-copper clearance | 6 mil (§1.3) | **0 violations**; tightest 6.21 mil |
+| Copper-to-board-edge | 10 mil | **0 violations** |
+| Hole-to-copper (other nets) | 11.8 mil | **0 violations** |
+| Connectivity, fills+pours folded in | — | **0 airwires**, 18/18 nets one island |
+| Schematic ↔ PCB pad sets | — | **18/18 identical**; only delta `U3` pin 9 (§3.2) |
+| Silkscreen on solderable copper | — | **none** (791 silk segments vs 130 pads) |
+| Designators on silkscreen | — | **all 42 present** |
+| Pin-1 marker on THT connectors | — | present in copper (square pad) on J4, J5, SC1, Reset, Wifi, program |
+| Via annular ring | 0.13 mm | 97 vias, 0.305 mm drill / 0.610 mm pad → **0.152 mm** |
+| THT annular ring | 0.13 mm | **0.300–0.450 mm** |
+| Narrowest track | fab min | **0.201 mm** (SDA/SCL) |
+| Via tenting | — | all 97 tented (mask expansion −1000 mil) |
+| Stackup | — | 1 oz outer, 1.51 mm core → 1.6 mm finished |
+
+### 8.1 Footprints were checked against the datasheets — they are right
+
+| Part | Board land | Datasheet | Verdict |
+|---|---|---|---|
+| U1 TPS61021A DSG0008A | 0.249 × 0.521 mm, 0.5 pitch, rows 1.9 mm; EP 1.600 × 0.899 | 0.25 × 0.55, 0.5 pitch, rows 1.9; thermal land 0.9 × 1.6 | **exact match**; EP tied to GND as the datasheet requires |
+| U3 HDC3020 DEF0008A | 0.701 × 0.249 mm, 0.5 pitch, rows 2.4 mm, no EP land | 0.6 × 0.25, span 2.3 mm | IPC-style land with outward fillets rather than TI's minimal span — **fine**, and the missing EP land is deliberate (§3.2) |
+| U4 STM32L010F4P6 TSSOP-20 | 0.363 × 1.742 mm, 0.65 pitch, rows 5.74 mm | body 6.5 × 4.4, lead span 6.4 | standard IPC land, **fine** |
+| U5 TPS22919 SC-70-6 | 0.599 × 0.419 mm, 0.65 pitch, rows 1.9 mm | DCK | **fine** |
+| U2 T3-3S | 2.2 × 1.1 mm pads, 2.0 mm pitch, rows 15.002 mm | body 16 ± 0.35 × 24 ± 0.35 mm | castellated land, 0.6 mm of pad outside the module edge for the fillet — **fine** (but see §8.2) |
+| L1 MWSA0518S | 2.499 × 1.900 mm, 4.1 mm apart | 5.2 × 5.4 body | **fine** |
+
+Component body outlines live on **MECHANICAL7** and are trustworthy — U4 measures exactly
+6.50 × 4.40 mm, U1 2.00 × 2.00, U3 2.50 × 2.50, C11 1.60 × 3.20. Use that layer, not the
+silkscreen, when checking mechanical fit.
+
+### 8.2 U2 overhangs the board edge by 7.00 mm — verified, flagged, not settled
+
+The T3-3S body (MECHANICAL7: x 6.350–22.352, y **22.997–46.995**) runs past the board's top
+edge at y = 40.000 by **exactly 7.00 mm**. All 16 pads are on the board (y 24.496–38.496), so
+this is electrically fine and looks deliberate — hanging the antenna end off the carrier board
+is the standard way to keep it away from ground copper, and Tuya asks for 15 mm of clearance
+to metal.
+
+**This is recorded as verified-and-intentional, not as a defect** — but it is *not* a
+"stop looking" item, because it constrains every board house:
+
+- the panel needs ≥ 7 mm of clearance or a rail cutout on that edge;
+- the board cannot sit flat on a conveyor during assembly;
+- the module is cantilevered on its solder joints — handle the assembled boards by the PCB.
+
+Tell the assembler about it explicitly when placing an order.
+
+### 8.3 Decoupling placement is good — with one known exception
+
+Distance from each supply pin to its nearest bypass cap on the same net:
+
+| Pin | Nearest cap | Distance |
+|---|---|---|
+| U4.16 VDD | C2 100 nF | 1.83 mm |
+| U4.5 VDDA | C4 100 nF | 1.70 mm |
+| U1.3/U1.4 VOUT | C3 10 µF | 1.27 mm |
+| U3.5 VDD | C9 100 nF | 1.33 mm |
+| U2.8 VBAT | C7 100 nF | 2.24 mm |
+| **U1.8 VIN** | **C1 10 µF** | **5.39 mm** |
+
+The last row is the open nit already named in §4.3. C15 (100 nF, `adc_batt`) is **13.8 mm**
+away, sitting by the battery connector instead of at the boost. TPS61021A §9.4 wants a 100 nF
+at VIN/PGND. Nothing depends on it at this load, but moving C15 next to U1.8 is the single
+cheapest layout improvement left on this board.
+
+---
+
+## 9. Summary of intentionally unconnected pins
 
 Do not flag these as missed connections:
 

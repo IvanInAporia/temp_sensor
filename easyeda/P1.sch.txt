@@ -1,6 +1,6 @@
 # SCHEMATIC REVIEW EXPORT
 source: P1.schdoc
-sha256-12: 81829856c3c5
+sha256-12: fa324c6c4f47
 exporter: eda_review_export.py v1.1
 content: connectivity + component attributes only; symbol placement, wire routing, colours and fonts are intentionally omitted
 sheet.@Board Name: Board1
@@ -20,11 +20,11 @@ sheet.Height: 866.1417322834645
 sheet.Page Size: A4
 sheet.Region Start: 1
 sheet.Title Block Position: 3
-sheet.Version: V1.0
+sheet.Version: V2.0
 sheet.Width: 1397.6377952755906
 sheet.X Region Count: 6
 sheet.Y Region Count: 4
-summary: 37 components, 123 pins, 18 nets, 20 unconnected pins
+summary: 42 components, 129 pins, 18 nets, 20 unconnected pins
 pin token: REF.PAD[=PINNAME][:TYPE]; TYPE omitted when Passive (EasyEDA exports all pins as Passive, so pin direction is unavailable)
 
 ## COMPONENTS
@@ -88,6 +88,8 @@ C15  val=100nF  fp=C0402  dev=FN15X104K160PNG  pins=2  mfr=PSA(信昌电陶)  mp
     LCSC Part Name=100nF ±10% 16V; Temperature Coefficient=X7R; Tolerance=±10%;
     Voltage Rating=16V;
     desc: Capacitance:100nF Tolerance:±10% Tolerance:±10% Voltage Rating:16V Temperature Coefficient:X7R
+gnd  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
 J4  val=CB3S1  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  dev=Connector_Generic_Conn_01x03  pins=3
     desc: Generic connector, single row, 01x03, script generated (kicad-library-utils/schlib/autogen/connector/)
 J5  val=CB3S2  fp=Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical  dev=Connector_Generic_Conn_01x03  pins=3
@@ -108,26 +110,37 @@ R2  val=634kΩ  fp=R0402  dev=0402WGF6343TCE  pins=2  mfr=UNI-ROYAL(厚声)  mpn
     Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
     Voltage-Supply(Max)=50V;
     desc: Type:Thick Film Resistor Resistance:634kΩ Tolerance:±1% Tolerance:±1% Power(Watts):62.5mW Voltage-Supply(Max):50V Temperature Coefficient:±100ppm/℃ Temperatu...
-R3  val=1kΩ  fp=R0603  dev=FRC0603F1001TS  pins=2  mfr=FOJAN(富捷)  mpn=FRC0603F1001TS  lcsc=C2907002
-    LCSC Part Name=1kΩ ±1% 100mW 厚膜电阻; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+R3  val=10kΩ  fp=R0603  dev=RC0603FR-0710KL  pins=2  mfr=YAGEO(国巨)  mpn=RC0603FR-0710KL  lcsc=C98220
+    LCSC Part Name=厚膜电阻 10kΩ ±1% 100mW; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
     Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
     Voltage-Supply(Max)=75V;
-    desc: Type:Thick Film Resistor Resistance:1kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature ...
-R4  val=10kΩ  fp=R0402  dev=1RC0402J0103  pins=2  mfr=SAE(世盟/世爱)  mpn=1RC0402J0103  lcsc=C54531014
-    LCSC Part Name=厚膜电阻±5%10KΩ±100ppm/℃; Operating Temperature=-55℃~+155℃; Power(Watts)=62.5mW;
-    Temperature Coefficient=±100ppm/℃; Tolerance=±5%; Type=Thick Film Resistor;
-    Voltage-Supply(Max)=50V;
-    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±5% Tolerance:±5% Power(Watts):62.5mW Voltage-Supply(Max):50V Temperature Coefficient:±100ppm/℃ Temperatur...
-R5  val=1kΩ  fp=R0603  dev=FRC0603F1001TS  pins=2  mfr=FOJAN(富捷)  mpn=FRC0603F1001TS  lcsc=C2907002
-    LCSC Part Name=1kΩ ±1% 100mW 厚膜电阻; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature...
+R4  val=10kΩ  fp=R0603  dev=RC0603FR-0710KL  pins=2  mfr=YAGEO(国巨)  mpn=RC0603FR-0710KL  lcsc=C98220
+    LCSC Part Name=厚膜电阻 10kΩ ±1% 100mW; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
     Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
     Voltage-Supply(Max)=75V;
-    desc: Type:Thick Film Resistor Resistance:1kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature ...
+    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature...
+R5  val=10kΩ  fp=R0603  dev=RC0603FR-0710KL  pins=2  mfr=YAGEO(国巨)  mpn=RC0603FR-0710KL  lcsc=C98220
+    LCSC Part Name=厚膜电阻 10kΩ ±1% 100mW; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=75V;
+    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature...
+R6  val=10kΩ  fp=R0603  dev=RC0603FR-0710KL  pins=2  mfr=YAGEO(国巨)  mpn=RC0603FR-0710KL  lcsc=C98220
+    LCSC Part Name=厚膜电阻 10kΩ ±1% 100mW; Operating Temperature=-55℃~+155℃; Power(Watts)=100mW;
+    Temperature Coefficient=±100ppm/℃; Tolerance=±1%; Type=Thick Film Resistor;
+    Voltage-Supply(Max)=75V;
+    desc: Type:Thick Film Resistor Resistance:10kΩ Tolerance:±1% Tolerance:±1% Power(Watts):100mW Voltage-Supply(Max):75V Temperature Coefficient:±100ppm/℃ Temperature...
 Reset  val=Reset  fp=water_tank:SW_PUSH  dev=Switch_SW_Push  pins=2
     desc: Push button switch, generic, two pins
 SC1  val=1.2V  fp=water_tank:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical  dev=Device_Solar_Cell  pins=2
     desc: Single solar cell
+scl  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+sda  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
 TP_3v3  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
+    desc: Test Point 测试点
+TP_gnd  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
     desc: Test Point 测试点
 TP_PA5  fp=HDR-TH_1P-P2.54-V-F  dev=Test-Point  pins=1
     desc: Test Point 测试点
@@ -190,26 +203,26 @@ N$TP_PA5.1 (2)   [auto-named, no net label in source]
     TP_PA5.1 U4.11=PA5
 N$U4.13 (2)   [auto-named, no net label in source]
     U4.13=PA7 Wifi.2
-power_GNDREF (30)
-    C1.1 C2.1 C3.1 C4.1 C5.1 C6.1 C7.1 C8.1 C9.1 C11.1 C12.1 C13.1 C14.1 C15.1 J4.2=Pin_2
-    J5.3=Pin_3 program.4 R1.1 R4.1 Reset.1 SC1.2=- U1.1=AGND U1.9=EPAD U2.9=GND U3.2=ADDR
-    U3.7=ADDR1 U3.8=GND U4.15=VSS U5.2=GND Wifi.1
-SCL (3)
-    R3.1 U3.4=SCL U4.17=PA9
-SDA (3)
-    R5.1 U3.1=SDA U4.18=PA10
+power_GNDREF (33)
+    C1.1 C2.1 C3.1 C4.1 C5.1 C6.1 C7.1 C8.1 C9.1 C11.1 C12.1 C13.1 C14.1 C15.1 gnd.1 J4.2=Pin_2
+    J5.3=Pin_3 program.4 R1.1 R4.1 R6.1 Reset.1 SC1.2=- TP_gnd.1 U1.1=AGND U1.9=EPAD U2.9=GND
+    U3.2=ADDR U3.7=ADDR1 U3.8=GND U4.15=VSS U5.2=GND Wifi.1
+SCL (4)
+    R3.1 scl.1 U3.4=SCL U4.17=PA9
+SDA (4)
+    R5.1 sda.1 U3.1=SDA U4.18=PA10
 SWCLK (2)
     program.2 U4.20=PA14
 SWDIO (2)
     program.3 U4.19=PA13
 uC_reset (4)
     C8.2 program.1 Reset.2 U4.4=NRST
-Wifi_On (2)
-    U4.10=PA4 U5.3=ON
+Wifi_On (3)
+    R6.2 U4.10=PA4 U5.3=ON
 Wifi_Rx (3)
-    J5.2=Pin_2 U2.15=RX0 U4.9=PA3
+    J5.1=Pin_1 U2.16=TX0 U4.9=PA3
 Wifi_Tx (3)
-    J5.1=Pin_1 U2.16=TX0 U4.8=PA2
+    J5.2=Pin_2 U2.15=RX0 U4.8=PA2
 
 ## PIN MAP  (same data as ## NETS, indexed by component)
 C1  FCC0402X106M100AT
@@ -257,13 +270,15 @@ C14  TCC1206X6S476M6R3HT
 C15  FN15X104K160PNG
        1                  -> power_GNDREF
        2                  -> adc_batt
+gnd  Test-Point
+       1                  -> power_GNDREF
 J4  Connector_Generic_Conn_01x03
        1 Pin_1            -> N$C6.2
        2 Pin_2            -> power_GNDREF
        3 Pin_3            -> N$J4.3
 J5  Connector_Generic_Conn_01x03
-       1 Pin_1            -> Wifi_Tx
-       2 Pin_2            -> Wifi_Rx
+       1 Pin_1            -> Wifi_Rx
+       2 Pin_2            -> Wifi_Tx
        3 Pin_3            -> power_GNDREF
 L1  MWSA0518S-R47MT
        1                  -> adc_batt
@@ -279,23 +294,32 @@ R1  AR02DTD2003
 R2  0402WGF6343TCE
        1                  -> N$C10.1
        2                  -> +3v3
-R3  FRC0603F1001TS
+R3  RC0603FR-0710KL
        1                  -> SCL
        2                  -> +3v3
-R4  1RC0402J0103
+R4  RC0603FR-0710KL
        1                  -> power_GNDREF
        2                  -> N$R4.2
-R5  FRC0603F1001TS
+R5  RC0603FR-0710KL
        1                  -> SDA
        2                  -> +3v3
+R6  RC0603FR-0710KL
+       1                  -> power_GNDREF
+       2                  -> Wifi_On
 Reset  Switch_SW_Push
        1                  -> power_GNDREF
        2                  -> uC_reset
 SC1  Device_Solar_Cell
        1 +                -> adc_batt
        2 -                -> power_GNDREF
+scl  Test-Point
+       1                  -> SCL
+sda  Test-Point
+       1                  -> SDA
 TP_3v3  Test-Point
        1                  -> +3v3
+TP_gnd  Test-Point
+       1                  -> power_GNDREF
 TP_PA5  Test-Point
        1                  -> N$TP_PA5.1
 TP_uC_V  Test-Point
@@ -329,8 +353,8 @@ U2  T3-3S
       12 RX1              -> (unconnected)
       13 P36              -> (unconnected)
       14 P18              -> (unconnected)
-      15 RX0              -> Wifi_Rx
-      16 TX0              -> Wifi_Tx
+      15 RX0              -> Wifi_Tx
+      16 TX0              -> Wifi_Rx
 U3  HDC3020DEFR
        1 SDA              -> SDA
        2 ADDR             -> power_GNDREF
