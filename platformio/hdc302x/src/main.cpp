@@ -11,9 +11,11 @@
 #include <PubSubClient.h>
 #include <Arduino_JSON.h>
 #include "secrets.h"
+#include <Adafruit_HDC302x.h>
 
+Adafruit_HDC302x hdc = Adafruit_HDC302x();
 
-TwoWire wire = TwoWire();
+// TwoWire wire = TwoWire();
 uint8_t buffer[6] = {0};
 
 const char* temp_topic = "home/bed/temperature";
@@ -28,24 +30,31 @@ void setup()
 {
     Serial.begin(9600);                       // Init the serial device
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
+    // WiFi.mode(WIFI_STA);
+    // WiFi.begin(ssid, password);
 
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println("connected");
+    // while (WiFi.status() != WL_CONNECTED) {
+    //     delay(500);
+    //     Serial.print(".");
+    // }
+    // Serial.println("connected");
 
-    client.setServer(mqtt_server, 1883);
+    // client.setServer(mqtt_server, 1883);
 
-    wire.pins(I2C_SDA_PIN, I2C_SCL_PIN);
+    // wire.pins(I2C_SDA_PIN, I2C_SCL_PIN);
 
-    wire.begin();
+    // wire.begin();
+
+    if (! hdc.begin(0x44, &Wire)) {
+    Serial.println("Could not find sensor?");
+    while (1);
+  }
+  delay(1000);
 }
 
 void loop()
 {
+    /*
     Wire.beginTransmission(HDC302X_ADDRESS);
     Wire.write(0x24);
     Wire.write(0x00);
@@ -125,6 +134,21 @@ void loop()
     }    
 
     ESP.deepSleep(2*1000000, RF_DEFAULT);
+    */
+
+    double temp = 0.0;
+    double RH = 0.0;
+
+    hdc.readTemperatureHumidityOnDemand(temp, RH, TRIGGERMODE_LP0);
+
+    Serial.print("Temperature: ");
+    Serial.print(temp);
+    Serial.println(" °C");
+
+    Serial.print("Humidity: ");
+    Serial.print(RH);
+    Serial.println(" %");
+    delay(2000);
 }
 
 
