@@ -22,6 +22,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+/* The board-agnostic half of the firmware.  Everything below these two headers
+   lives outside this CubeMX project (../../libs/src, ../../temp_sensor_main)
+   and knows nothing about the STM32; the board it runs on is
+   Core/Src/bsp_stm32.c and nothing else. */
+#include "bsp.h"
+#include "temp_sensor_main.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -116,6 +123,14 @@ int main(void)
      actually wants the module. */
   Wifi_RailOff();
 
+  /* Latches the reset reason, disarms the wakeup timer MX_RTC_Init() left
+     running, enables the LPUART1 interrupt, and settles the board into its off
+     state.  Must come after every MX_*_Init above, because it uses the handles
+     they set up. */
+  BSP_Init();
+
+  TempSensorInit();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -125,6 +140,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+    /* One measurement cycle, then sleep until the next is due.  Everything
+       that makes this device what it does is in there; this loop exists only
+       because CubeMX owns the shape of main(). */
+    TempSensorRunCycle();
   }
   /* USER CODE END 3 */
 }

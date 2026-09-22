@@ -29,4 +29,41 @@
 		<nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
 		<nature>org.eclipse.cdt.managedbuilder.core.ScannerConfigNature</nature>
 	</natures>
+	<linkedResources>
+		<link>
+			<name>lib_bsp</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/libs/src/bsp</locationURI>
+		</link>
+		<link>
+			<name>lib_sensor</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/libs/src/sensor</locationURI>
+		</link>
+		<link>
+			<name>lib_battery</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/libs/src/battery</locationURI>
+		</link>
+		<link>
+			<name>lib_report</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/libs/src/report</locationURI>
+		</link>
+		<link>
+			<name>lib_tuya_link</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/libs/src/tuya_link</locationURI>
+		</link>
+		<link>
+			<name>temp_sensor_main</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/temp_sensor_main</locationURI>
+		</link>
+		<link>
+			<name>tuya_sdk</name>
+			<type>2</type>
+			<locationURI>PARENT-1-PROJECT_LOC/tuya</locationURI>
+		</link>
+	</linkedResources>
 </projectDescription>

@@ -1,0 +1,5 @@
+add_subdirectory ("bsp")
+add_subdirectory ("sensor")
+add_subdirectory ("battery")
+add_subdirectory ("report")
+add_subdirectory ("tuya_link")

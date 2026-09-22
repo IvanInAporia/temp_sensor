@@ -1,0 +1,5 @@
+add_subdirectory ("mocks")
+add_subdirectory ("hdc3020_test")
+add_subdirectory ("battery_test")
+add_subdirectory ("report_policy_test")
+add_subdirectory ("temp_sensor_main_test")
