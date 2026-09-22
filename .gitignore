@@ -1,0 +1,17 @@
+
+# EasyEDA
+/easyeda/temp_sensor_backup/*
+
+# STM32
+**/.settings/
+*.prefs
+/temp_sensor_STM32L010F4/Release/*
+*.launch
+**/Debug/**
+
+#python 
+__pycache__/
+*.pyc
+.pytest_cache/
+*.cyclo
+
