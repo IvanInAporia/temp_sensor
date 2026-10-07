@@ -147,6 +147,27 @@ void BSP_Init(void)
   reset_flags = RCC->CSR;
   __HAL_RCC_CLEAR_RESET_FLAGS();
 
+#ifndef DEBUG
+  /* CubeIDE's "Debug in low power modes" sets DBG_SLEEP/STOP/STANDBY, and only
+     a power-on reset clears them -- not the reset button, not a reflash. Left
+     set, Stop keeps the core clocks running and draws milliamps instead of
+     microamps, so a board last flashed with the debugger attached drains its
+     cell until someone power-cycles it. Release clears them itself. The cost:
+     a debugger attached to a Release build drops off at the first Stop.
+     DBGMCU writes need its APB clock; put that back the way it was found. */
+  bool dbgmcu_clk_was_on = __HAL_RCC_DBGMCU_IS_CLK_ENABLED();
+
+  __HAL_RCC_DBGMCU_CLK_ENABLE();
+  HAL_DBGMCU_DisableDBGSleepMode();
+  HAL_DBGMCU_DisableDBGStopMode();
+  HAL_DBGMCU_DisableDBGStandbyMode();
+
+  if (!dbgmcu_clk_was_on)
+  {
+    __HAL_RCC_DBGMCU_CLK_DISABLE();
+  }
+#endif
+
   /* Priority 0, the same as the button's EXTI and the RTC. Above SysTick
      (priority 3) deliberately: a tick may wait, a byte arriving at 9600 into a
      single-byte receive may not. */
@@ -186,8 +207,20 @@ void BSP_Idle(void)
      SysTick is running here, which is what gives bsp.h's promise of a bounded
      return: even with the module silent this cannot park for more than 1 ms,
      so a condition satisfied between the caller's test and this call costs at
-     most one tick rather than the whole timeout. */
+     most one tick rather than the whole timeout.
+
+     NO_SLEEP (defined in the Debug configuration) turns this into a plain
+     return, and the caller's wait loop into a spin. With the debugger
+     attached, the first interrupt to wake the core from this WFI after the
+     Wi-Fi rail comes up HardFaults: the core drops SP for the exception frames
+     but they never reach SRAM, and the return pops whatever was there before.
+     Without the debugger, or without the WFI, it does not happen -- so it is
+     a debug-in-low-power artefact, not a firmware bug, but it makes the
+     report window undebuggable. Release keeps the WFI; current measured on a
+     Debug build during a window is not representative. */
+#ifndef NO_SLEEP
   __WFI();
+#endif
 }
 
 /* Milliseconds since midnight, from the RTC calendar.
