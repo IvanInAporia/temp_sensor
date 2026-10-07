@@ -460,6 +460,12 @@ void uart_receive_input(unsigned char value)
   }
 }
 
+/* PORTED: fill level of wifi_data_process_buf.  Tuya keeps it as a static
+   local of wifi_uart_service(); hoisted here so wifi_protocol_init() can
+   clear it, otherwise a partial frame left over from the previous window
+   sits in front of the first frame of the next one. */
+static unsigned short rx_in = 0;
+
 /**
  * @brief  Wifi serial port processing service
  * @param  Null
@@ -472,7 +478,6 @@ void wifi_uart_service(void)
      runs on every pass (libs/src/tuya_link/tuya_link.c, Tuya_WaitUntil).  Not
      from the main loop unconditionally as Tuya assumes, because outside a
      window the module is unpowered and there is nothing to service. */
-  static unsigned short rx_in = 0;
   unsigned short offset = 0;
   unsigned short rx_value_len = 0;
   
@@ -548,6 +553,7 @@ void wifi_protocol_init(void)
      the cached Wi-Fi state have to be reset with it. */
   queue_in = (unsigned char *)wifi_uart_rx_buf;
   queue_out = (unsigned char *)wifi_uart_rx_buf;
+  rx_in = 0;
   //
 #ifndef WIFI_CONTROL_SELF_MODE
   wifi_work_state = WIFI_SATE_UNKNOW;

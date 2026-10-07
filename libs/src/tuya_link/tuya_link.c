@@ -69,9 +69,10 @@ void Tuya_PowerOn(void)
     BSP_Wifi_PowerOn();
 
     /* The module boots from scratch on every window, so the parser must too.
-     * This drops whatever was left in the ring from last time and puts the
-     * cached Wi-Fi state back to WIFI_SATE_UNKNOW, which is what
-     * Tuya_IsAlive() tests. Carrying either across a window would have the
+     * This drops whatever was left in the ring and the frame buffer from
+     * last time and puts the cached Wi-Fi state back to WIFI_SATE_UNKNOW,
+     * which is what Tuya_IsAlive() tests. Carrying any of it across a
+     * window would have the
      * cycle believe the module was already connected while it was still
      * booting. */
     wifi_protocol_init();
