@@ -117,6 +117,9 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
+  // Delay to give the debugger a chance to attach
+  HAL_Delay(2000);
+
   /* MX_LPUART1_UART_Init() above configured PA2/PA3 as AF while PA4 is still
      low, i.e. TX idling high into an unpowered module.  Park them and settle
      into the known-off state; the application calls Wifi_RailOn() when it
