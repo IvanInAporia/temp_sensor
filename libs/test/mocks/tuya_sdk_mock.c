@@ -26,8 +26,7 @@ static bool    schedule_armed;
 
 static int service_calls;
 static int protocol_init_calls;
-static int set_wifi_mode_calls;
-static uint8_t last_wifi_mode;
+static int reset_wifi_calls;
 
 static uint8_t rx_bytes[RX_CAPACITY];
 static int     rx_byte_count;
@@ -47,8 +46,7 @@ void tuyaSdkMockReset(void)
 
     service_calls       = 0;
     protocol_init_calls = 0;
-    set_wifi_mode_calls = 0;
-    last_wifi_mode      = 0xFFu;
+    reset_wifi_calls    = 0;
 
     memset(rx_bytes, 0, sizeof(rx_bytes));
     rx_byte_count = 0;
@@ -75,6 +73,19 @@ void tuyaSdkMockSetWifiStateAfter(int calls, uint8_t state)
 
 /* --- SDK entry points the glue calls -------------------------------------- */
 
+/* The module starts over from nothing: the cached work state is forgotten and
+ * the scripted boot runs again from the top. */
+static void ModuleRestarts(void)
+{
+    wifi_state = WIFI_SATE_UNKNOW;
+
+    if (schedule_set)
+    {
+        schedule_base  = service_calls;
+        schedule_armed = true;
+    }
+}
+
 void wifi_protocol_init(void)
 {
     protocol_init_calls++;
@@ -82,16 +93,10 @@ void wifi_protocol_init(void)
     /* The real one drops the ring and resets the cached work state, which is
      * exactly why Tuya_PowerOn has to call it on every window. Modelled,
      * because a test that asserts "the glue does not believe a cold-booting
-     * module is already connected" needs this to actually happen. */
-    wifi_state = WIFI_SATE_UNKNOW;
-
-    /* ...and the scripted boot restarts with it: the module is unpowered
-     * between windows, so it associates again from nothing every time. */
-    if (schedule_set)
-    {
-        schedule_base  = service_calls;
-        schedule_armed = true;
-    }
+     * module is already connected" needs this to actually happen. The module
+     * is unpowered between windows, so it associates again from nothing every
+     * time. */
+    ModuleRestarts();
 }
 
 void wifi_uart_service(void)
@@ -105,7 +110,7 @@ void wifi_uart_service(void)
     }
 }
 
-void uart_receive_input(unsigned char value)
+void uart_receive_input(u8 value)
 {
     if (rx_byte_count < RX_CAPACITY)
     {
@@ -115,15 +120,22 @@ void uart_receive_input(unsigned char value)
     rx_byte_count++;
 }
 
-unsigned char mcu_get_wifi_work_state(void)
+u8 mcu_get_wifi_work_state(void)
 {
     return wifi_state;
 }
 
-void mcu_set_wifi_mode(unsigned char mode)
+void mcu_reset_wifi(void)
 {
-    set_wifi_mode_calls++;
-    last_wifi_mode = (uint8_t) mode;
+    reset_wifi_calls++;
+
+    /* The real module restarts on the reset command and comes back in pairing
+     * mode, and the real mcu_reset_wifi() forgets the cached state with it
+     * (PORTED, ../../../tuya/mcu_api.c). So a module that was already online
+     * when the button was pressed is not online any more until the scripted
+     * boot says so again -- which is what keeps a pairing window from taking
+     * the old connection for the new one. */
+    ModuleRestarts();
 }
 
 static void RecordDp(uint8_t dpid, bool is_enum, uint32_t value)
@@ -138,18 +150,16 @@ static void RecordDp(uint8_t dpid, bool is_enum, uint32_t value)
     dp_count++;
 }
 
-unsigned char mcu_dp_value_update(unsigned char dpid, unsigned long value)
+u8 mcu_dp_value_update(u8 dpid, u32 value)
 {
-    /* Truncated to 32 bits deliberately: that is the width int_to_byte puts on
-     * the wire, and `unsigned long` is 64 bits on some hosts. Keeping the
-     * capture at wire width is what lets a test assert the two's-complement
-     * form of a sub-zero temperature. */
+    /* Captured at wire width, which is what lets a test assert the
+     * two's-complement form of a sub-zero temperature. */
     RecordDp((uint8_t) dpid, false, (uint32_t) value);
 
     return SUCCESS;
 }
 
-unsigned char mcu_dp_enum_update(unsigned char dpid, unsigned char value)
+u8 mcu_dp_enum_update(u8 dpid, u8 value)
 {
     RecordDp((uint8_t) dpid, true, (uint32_t) value);
 
@@ -168,14 +178,9 @@ int tuyaSdkMockProtocolInitCalls(void)
     return protocol_init_calls;
 }
 
-int tuyaSdkMockSetWifiModeCalls(void)
+int tuyaSdkMockResetWifiCalls(void)
 {
-    return set_wifi_mode_calls;
-}
-
-uint8_t tuyaSdkMockLastWifiMode(void)
-{
-    return last_wifi_mode;
+    return reset_wifi_calls;
 }
 
 int tuyaSdkMockRxByteCount(void)

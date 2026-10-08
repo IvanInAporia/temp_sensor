@@ -160,8 +160,8 @@ TEST_F(TempSensorMainTest, SendsAllFourDatapointsTogether)
 
 TEST_F(TempSensorMainTest, SendsSubZeroTemperatureAsASignedValue)
 {
-    // DP 1 has range -200..600 in 0.1 C. The SDK puts an unsigned long on the
-    // wire as four big-endian bytes, so the sign has to survive the widening
+    // DP 1 has range -200..600 in 0.1 C. The SDK puts a u32 on the wire as
+    // four big-endian bytes, so the sign has to survive the widening
     // or a freezing room reads as +6553 C in the app.
     ModuleReachesCloud();
     StageReading(-105, 55u); // -10.5 C
@@ -244,8 +244,8 @@ TEST_F(TempSensorMainTest, GivesUpOnADeadModuleWithinTheAliveTimeout)
     ModuleNeverAnswers();
     RunCycles(1);
 
-    EXPECT_GE(bspMockWifiLastWindowMs(), 10u * 1000u);
-    EXPECT_LT(bspMockWifiLastWindowMs(), 15u * 1000u);
+    EXPECT_GE(bspMockWifiLastWindowMs(), 15u * 1000u);
+    EXPECT_LT(bspMockWifiLastWindowMs(), 20u * 1000u);
 }
 
 TEST_F(TempSensorMainTest, GivesUpOnAnUnreachableCloudWithinItsTimeout)
@@ -319,21 +319,31 @@ TEST_F(TempSensorMainTest, AButtonPressOpensAPairingWindow)
     RunCycles(1);
 
     EXPECT_EQ(windows + 1, WindowsOpened());
-    EXPECT_EQ(1, tuyaSdkMockSetWifiModeCalls());
-    EXPECT_EQ(SMART_CONFIG, tuyaSdkMockLastWifiMode());
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+}
+
+TEST_F(TempSensorMainTest, AReportWindowDoesNotAskTheModuleToPair)
+{
+    // The reset that starts pairing also drops the module off its network for
+    // up to three minutes. Only the button may send it.
+    ModuleReachesCloud();
+    RunCycles(1);
+
+    ASSERT_EQ(1, WindowsOpened());
+    EXPECT_EQ(0, tuyaSdkMockResetWifiCalls());
 }
 
 TEST_F(TempSensorMainTest, PairingWaitsForTheModuleBeforeAskingItToPair)
 {
-    // mcu_set_wifi_mode is a plain transmit: one sent into a module that has
-    // not finished booting is simply lost, and the user is left holding a
-    // button that did nothing.
+    // mcu_reset_wifi is a plain transmit: one sent into a module that has not
+    // finished booting is simply lost, and the user is left holding a button
+    // that did nothing.
     ModuleNeverAnswers();
     bspMockPressButton();
     RunCycles(1);
 
     EXPECT_EQ(1, WindowsOpened());
-    EXPECT_EQ(0, tuyaSdkMockSetWifiModeCalls());
+    EXPECT_EQ(0, tuyaSdkMockResetWifiCalls());
 }
 
 TEST_F(TempSensorMainTest, AButtonGlitchIsNotAPress)

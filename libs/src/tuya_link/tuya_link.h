@@ -62,9 +62,14 @@ bool Tuya_WaitUntil(bool (*condition)(void), uint32_t timeout_ms);
  */
 void Tuya_ServiceFor(uint32_t ms);
 
-/* True once the module has told us anything at all about its Wi-Fi state, i.e.
- * it has booted and is talking. Nothing may be sent to it before this -- a
- * command sent into a module that is still booting is simply lost.
+/* True once the module has told us anything at all about its Wi-Fi state.
+ *
+ * The module only reports its state (command 0x03) after its start-up
+ * handshake with the MCU -- heartbeat, product information, working mode --
+ * which the SDK answers on its own from inside Tuya_Service(). So this is the
+ * point at which the module has booted, knows which product it is, and takes
+ * commands. Nothing may be sent to it before this -- a command sent into a
+ * module that is still booting is simply lost.
  */
 bool Tuya_IsAlive(void);
 
@@ -75,11 +80,15 @@ bool Tuya_IsCloudConnected(void);
 
 /* Put the module into pairing mode. Requires Tuya_IsAlive().
  *
- * The T3-3S pairs over Bluetooth or as an AP hotspot; the SDK's SMART_CONFIG
- * selects the module's default (Bluetooth on this hardware -- the old EZ/
- * SmartConfig broadcast is not a Wi-Fi 6 thing any more), which is also what
- * the Tuya app offers first. AP_CONFIG is the fallback if a phone cannot be
- * paired over Bluetooth; switching is a one-line change here.
+ * Sends the reset command, on which the module restarts into pairing over
+ * Bluetooth or as an AP hotspot -- whichever the phone uses. The module
+ * reports its state afresh once it is back, so Tuya_IsCloudConnected() is
+ * false until it has actually been paired, even if it was online a moment
+ * before.
+ *
+ * The product runs Tuya's anti-misoperation mode (CONFIG_MODE in
+ * ../../../tuya/protocol.h): a module that is not paired within three minutes
+ * goes back to the network it already had, so a stray press loses nothing.
  */
 void Tuya_StartPairing(void);
 

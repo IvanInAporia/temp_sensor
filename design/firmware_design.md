@@ -40,7 +40,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (66 tests) over the same C
+libs/test/                  host GoogleTest suite (67 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -184,12 +184,13 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  12180       8    1584   13772    35cc
+  12400       8    1592   14000    36b0
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~568 bytes and the stack has ~1480 available. Flash is 12.2 KB of
-16 KB, leaving ~4.2 KB.
+static RAM is ~576 bytes and the stack has ~1470 available. Flash is 12.4 KB of
+16 KB, leaving ~3.9 KB. (The same tree at `-O2` is 13.6 KB of text — it fits, but
+with half the headroom.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
 is `WIFI_UART_RECV_BUF_LMT` / `WIFI_DATA_PROCESS_LMT` in
@@ -198,33 +199,47 @@ them (§7).
 
 ## 7. The vendor Tuya SDK
 
-`tuya/` is Tuya's generated MCU SDK for this product. Every edit made to it is
-marked `PORTED:` with the reason. They are:
+`tuya/` is Tuya's generated MCU SDK for this product: the **standard** Wi-Fi MCU
+protocol, v2.6.2. Not the low-power one — the module firmware Tuya's burning tool
+flashes for this PID (3.0.93) speaks the standard protocol, and the two share a
+frame format but not a command set. A low-power SDK talking to it ignores the
+module's opening heartbeat, the module never gets past it, and the window times
+out with nothing on the wire but heartbeats. That is how the first bring-up
+failed.
+
+Every edit made to the SDK is marked `PORTED:` with the reason. They are:
 
 | File | Change |
 |---|---|
-| `protocol.c` | `uart_transmit_output` → `BSP_Wifi_TransmitByte`; `all_data_update` → `Tuya_ReportCachedDps`; `dp_download_handle` returned an **uninitialised** `ret` |
-| `mcu_api.c` | three `#error` porting markers removed (reminders, not gaps) |
-| `system.c` | `Queue_Read_Byte` returned an **uninitialised** local on the empty-queue path |
-| `protocol.h` | receive/process buffers raised from 16/24 to 32/32 |
-| `wifi.h` | dropped `#include "main.h"` — the SDK uses nothing from the board header, and including it made every file that includes `wifi.h` target-only, which is why none of it could be host-compiled |
+| `protocol.c` | `uart_transmit_output` → `BSP_Wifi_TransmitByte`; `all_data_update` → `Tuya_ReportCachedDps` |
+| `protocol.h` | receive/process buffers raised from 16/24 to 32/32; `WIFI_TEST_ENABLE` off; notes on `CONFIG_MODE` and the send buffer |
+| `mcu_api.c` | four `#error` porting markers removed; `wifi_uart_service`'s fill level hoisted so `wifi_protocol_init` resets it; the oversize-frame branch fixed (it allowed a frame the buffer cannot hold, and left the bad header in place to be found again on every pass — **a wedged parser for the rest of the window**); `mcu_reset_wifi` forgets the cached Wi-Fi state |
+| `system.h` | `rx_buf_in` / `rx_buf_out` made `volatile` pointers — they are shared with the receive interrupt, and only the bytes they point at were |
 
-The two buffer sizes are load-bearing and **both fail silently when too small**.
+The ring size is load-bearing and **fails silently when too small**.
 `uart_receive_input()` drops a byte without a word when the ring is full — no UART
 error, nothing any counter can see — so the ring has to cover the longest gap
-between `wifi_uart_service()` calls. The longest gap here is one outgoing DP
-report: `uart_transmit_output` blocks a byte at a time, so a 13-byte frame holds
-the loop for ~13 ms while the module is free to talk back. 32 gives 39 bytes,
-~40 ms of wire time at 9600. Tuya's 16 gives 23 bytes, ~24 ms — under half a frame
-of margin.
+between `wifi_uart_service()` calls. The longest gap here is `all_data_update()`:
+`uart_transmit_output` blocks a byte at a time, so four DP frames (57 bytes) hold
+the loop for ~60 ms while the module is free to send a heartbeat or a status
+change. Those are 7–8 bytes each; 32 gives a 39-byte ring. The process buffer is
+margin rather than a cliff now that an oversize frame is discarded.
 
-The remaining compiler warnings in `tuya/system.c` (`char*`/`unsigned char*`
-signedness, two unused locals in a `#ifdef`-thinned switch) are untouched vendor
+**Pairing** is the reset command (`0x04`, `mcu_reset_wifi`), not "reset and select
+mode" (`0x05`): the T3-3S pairs over Bluetooth or AP, and `0x04` lets it use both.
+The module restarts on it, which is why the SDK has to forget its cached state —
+otherwise a module that was online when the button was pressed reads as "paired"
+the instant the command goes out. The product runs Tuya's anti-misoperation mode
+(`"m":2`): an unpaired reset goes back to the old network after three minutes, the
+same three minutes the pairing window waits.
+
+The remaining compiler warnings in `tuya/` (a misleadingly indented
+`tuya_strncpy`, an unused local in a `#ifdef`-thinned switch) are untouched vendor
 code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 66 GoogleTest cases, ~1.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 67 GoogleTest cases, ~2.6 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -263,7 +278,8 @@ should replace it. The table is written as anchors precisely so that is an edit 
 not a rewrite, and `battery_test` pins the properties that must hold whatever the
 numbers are (monotonic, clamped at both ends, most of the scale on the plateau).
 
-Also unverified on hardware: the T3-3S boot and cloud-connect times that
-`WIFI_ALIVE_TIMEOUT_MS` and `WIFI_CLOUD_TIMEOUT_MS` are sized from, and the
-assumption that the SDK's `SMART_CONFIG` selects the module's Bluetooth pairing
-mode (the T3-3S datasheet lists Bluetooth and AP, not the older EZ broadcast).
+Also not yet measured with this firmware: the T3-3S boot and cloud-connect times
+that `WIFI_ALIVE_TIMEOUT_MS` and `WIFI_CLOUD_TIMEOUT_MS` are sized from. The only
+data so far is a Tuya MCU-simulator capture of a first pairing: ~3 s from the
+module's first heartbeat to its first state report, and ~9 s from "configured" to
+"cloud" — which is why the alive timeout is 15 s.

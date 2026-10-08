@@ -145,7 +145,11 @@ bool Tuya_IsCloudConnected(void)
 
 void Tuya_StartPairing(void)
 {
-    mcu_set_wifi_mode(SMART_CONFIG);
+    /* Reset (0x04), not "reset and select mode" (0x05): 0x05 picks between the
+     * old EZ broadcast and AP, and the T3-3S pairs over Bluetooth or AP. 0x04
+     * lets the module use its own default, which on a Wi-Fi + Bluetooth module
+     * resets both and pairs over either. */
+    mcu_reset_wifi();
 }
 
 void Tuya_SetDps(int16_t temp_c10,
@@ -177,12 +181,12 @@ void Tuya_ReportCachedDps(void)
 
     /* DP 1 is a signed value with range -200..600, i.e. 0.1 C units, which is
      * exactly what temp_c10 already is -- no scaling here. Cast through int32
-     * so a sub-zero temperature sign-extends before int_to_byte() takes it
-     * apart; casting an int16 straight to unsigned long would send 0xFFCE-ish
-     * garbage in the top two bytes on some toolchains. */
-    (void) mcu_dp_value_update(DPID_TEMP_CURRENT, (unsigned long) (int32_t) dps.temp_c10);
+     * so a sub-zero temperature sign-extends to all 32 bits before
+     * mcu_dp_value_update() takes it apart; the cloud reads the four bytes as
+     * a two's-complement int32. */
+    (void) mcu_dp_value_update(DPID_TEMP_CURRENT, (u32) (int32_t) dps.temp_c10);
 
-    (void) mcu_dp_value_update(DPID_HUMIDITY_VALUE, (unsigned long) dps.rh_pct);
-    (void) mcu_dp_enum_update(DPID_BATTERY_STATE, (unsigned char) dps.battery_state);
-    (void) mcu_dp_value_update(DPID_BATTERY_PERCENTAGE, (unsigned long) dps.battery_pct);
+    (void) mcu_dp_value_update(DPID_HUMIDITY_VALUE, (u32) dps.rh_pct);
+    (void) mcu_dp_enum_update(DPID_BATTERY_STATE, (u8) dps.battery_state);
+    (void) mcu_dp_value_update(DPID_BATTERY_PERCENTAGE, (u32) dps.battery_pct);
 }

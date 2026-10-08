@@ -40,8 +40,11 @@ void tuyaSdkMockSetWifiStateAfter(int calls, uint8_t state);
 int tuyaSdkMockServiceCalls(void);
 int tuyaSdkMockProtocolInitCalls(void);
 
-int     tuyaSdkMockSetWifiModeCalls(void);
-uint8_t tuyaSdkMockLastWifiMode(void);
+/* mcu_reset_wifi() calls, i.e. how many times the module was asked to pair.
+ * Each one also restarts the scripted boot, as the real module restarts on
+ * the reset command.
+ */
+int tuyaSdkMockResetWifiCalls(void);
 
 /* Bytes handed to uart_receive_input(), i.e. what the receive interrupt path
  * actually pushed into the SDK.

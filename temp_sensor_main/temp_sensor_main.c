@@ -34,11 +34,13 @@
  * step, how quickly it can be reported (up to two periods). */
 #define CYCLE_PERIOD_MS (5u * 60u * 1000u)
 
-/* The module has to boot and tell us something before anything may be sent to
- * it. Observed boot-to-first-heartbeat on a BK-series module is a few seconds;
- * this is that with a lot of room. Exceeding it means the module is not there:
- * unpowered, unflashed, or the UART is miswired. */
-#define WIFI_ALIVE_TIMEOUT_MS (10u * 1000u)
+/* The module has to boot and finish its start-up handshake before anything may
+ * be sent to it (Tuya_IsAlive). On the bench the T3-3S took ~3 s from its
+ * first heartbeat to its first state report, plus however long it took to
+ * boot to that heartbeat; this is several times that. Exceeding it means the
+ * module is not there or not talking our protocol: unpowered, unflashed, the
+ * UART miswired, or a module firmware that speaks something else. */
+#define WIFI_ALIVE_TIMEOUT_MS (15u * 1000u)
 
 /* Association plus cloud handshake on a healthy network. Past this the window
  * is written off and the report is left uncommitted, so the next cycle retries
@@ -47,7 +49,9 @@
 #define WIFI_CLOUD_TIMEOUT_MS (25u * 1000u)
 
 /* A pairing window instead: provisioning takes as long as somebody standing at
- * the device takes, which is not 25 seconds.
+ * the device takes, which is not 25 seconds. Three minutes is also how long the
+ * module itself stays in pairing mode before going back to its old network
+ * (CONFIG_MODE in ../tuya/protocol.h), so there is nothing to wait for after.
  *
  * Still under the cycle period, deliberately. Nothing breaks if a window
  * overruns it -- the schedule re-bases rather than firing a burst of catch-up
