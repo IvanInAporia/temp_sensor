@@ -10,7 +10,7 @@ this" list.
 |---|---|
 | Design | temp_sensor v2 (EasyEDA Pro) |
 | Reviewed against | `P1.schdoc` sha256[:12] `fa324c6c4f47`, `PCB1.pcbdoc` sha256[:12] `8a2e19924876` |
-| Last updated | 2026-09-20 (pre-production pass, 10-off PCBA) |
+| Last updated | 2026-09-22 (firmware config cross-check; see §6.1) |
 
 Datasheet summaries referenced below live in [`../docs/`](../docs/).
 
@@ -331,11 +331,34 @@ Both intentional. QOD is optional output discharge.
 | Signal | Pins | AF |
 |---|---|---|
 | I2C1 SCL / SDA | PA9 / PA10 | AF1 / AF1 |
-| USART2 TX / RX | PA2 / PA3 | AF4 / AF4 |
+| **LPUART1 TX / RX** | PA2 / PA3 | **AF6 / AF6** |
 | SWDIO / SWCLK | PA13 / PA14 | AF0 |
 
 Checked against the TSSOP20 signal-availability table. PA8 is not bonded on this package,
 so PA9 is the only MCO pin — not used here.
+
+**Correction (2026-09-22): the Wi-Fi UART is LPUART1, not USART2.** Earlier revisions of this
+note recorded USART2 (AF4), because that was the obvious reading of the schematic before any
+firmware existed. The `temp_sensor_STM32L010F4` CubeMX project assigns **LPUART1** (AF6) to the
+same two pins. **Both are legal on PA2/PA3 and the board does not care** — the copper is
+identical either way — so this is not a defect in either place.
+
+LPUART1 is the better choice here and should not be "corrected" back:
+
+- **It can sit armed in Stop mode for 0.01 µA.** Both peripherals do start-bit wakeup from
+  Stop, but the datasheet's Stop-mode adder table lists LPUART1 at 0.01 µA and does not list
+  USART2 at all. In run mode the two are a wash (8.3 vs 8.5 µA/MHz in Range 1), so Stop is
+  the whole argument.
+- The Tuya MCU SDK in [`../tuya/`](../tuya/) needs a byte-level RX interrupt that stays armed
+  ([`protocol.c`](../tuya/protocol.c), porting notes: "it is recommended not to turn off the
+  serial port interrupt … the interrupt will cause the serial port packet to be lost"). The
+  module talks whenever it likes, so the MCU has to be listening for the whole time the Wi-Fi
+  rail is up — being able to do that from Stop rather than Sleep is worth real current.
+- **Caveat:** none of that is free today. LPUART1 is clocked from PCLK1 in the current CubeMX
+  project, and PCLK1 stops in Stop mode, so the wakeup path is unavailable until the LPUART1
+  kernel clock is moved to HSI16. There is no LSE on this board (§9), so LSE is not an option.
+
+USART2 remains available on the same pins as a fallback if LPUART1 ever proves awkward.
 
 ### 6.2 Reset and boot circuitry is per datasheet
 
@@ -397,8 +420,8 @@ and could never have linked. It was corrected in `c60022f58cd2`. Current, correc
 
 | Net | Members | Direction |
 |---|---|---|
-| `Wifi_Rx` | J5.1, **U2.16 = TX0**, U4.9 = PA3 (USART2_RX) | module → MCU |
-| `Wifi_Tx` | J5.2, **U2.15 = RX0**, U4.8 = PA2 (USART2_TX) | MCU → module |
+| `Wifi_Rx` | J5.1, **U2.16 = TX0**, U4.9 = PA3 (LPUART1_RX / USART2_RX) | module → MCU |
+| `Wifi_Tx` | J5.2, **U2.15 = RX0**, U4.8 = PA2 (LPUART1_TX / USART2_TX) | MCU → module |
 
 Net names are **MCU-centric**: `Wifi_Rx` is the MCU's receive line and therefore lands on the
 module's *transmit* pin. That looks like a crossed net name at a glance and has already been
@@ -412,8 +435,11 @@ pin 1 is identifiable solely by its square pad — confirmed in copper on `8a2e1
 
 **Re-confirmed correct on `fa324c6c4f47` (2026-09-20)** against the TSSOP20 pinout in
 [`../docs/microcontroller/stm32l010f4-tssop20.md`](../docs/microcontroller/stm32l010f4-tssop20.md):
-pin 8 = PA2 = USART2_TX (AF4) sits on `Wifi_Tx` with U2.15/RX0, and pin 9 = PA3 = USART2_RX
-(AF4) sits on `Wifi_Rx` with U2.16/TX0. Note that the *exported* netlist snapshot in
+pin 8 = PA2 = TX sits on `Wifi_Tx` with U2.15/RX0, and pin 9 = PA3 = RX sits on `Wifi_Rx`
+with U2.16/TX0. PA2 is TX and PA3 is RX on **both** USART2 (AF4) and LPUART1 (AF6), so the
+crossover check is unaffected by which peripheral the firmware picks (§6.1).
+
+Note that the *exported* netlist snapshot in
 `P1.sch.txt` dated 2026-09-05 (sha `81829856c3c5`) still shows the **old, broken** straight-
 through wiring; that file is a stale artifact, not the design. Regenerate it before reading it.
 
