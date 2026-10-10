@@ -15,3 +15,8 @@ __pycache__/
 .pytest_cache/
 *.cyclo
 
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
