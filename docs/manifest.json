@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "project": "temp_sensor",
+  "root": "docs",
+  "_comment": "Tracked stand-in for the datasheet PDFs, which are gitignored. See docs/README.md; browse them with docs/browse.bat.",
+  "style": {
+    "examples": [
+      "sensor_component/hdc3020.md",
+      "boost_supply/tps61021adsgr.md"
+    ],
+    "variant_note": "microcontroller/stm32l010f4-tssop20.md"
+  },
+  "entries": [
+    {
+      "path": "boost_supply/tps61021a.pdf",
+      "title": "TPS61021A",
+      "url": "https://www.ti.com/lit/ds/symlink/tps61021a.pdf",
+      "sha256": "bd7d9d09ecc6206f84e200966bd00a9cf370c9fbdf3841d15affd64846a95a00",
+      "bytes": 5299081,
+      "brand": "Texas Instruments",
+      "variant": "TPS61021ADSGR",
+      "digest": "boost_supply/tps61021adsgr.md",
+      "notes": "Direct vendor URL. TI's copy is four bytes different from the cached one -- the same document, re-stamped -- so a re-download reports the content as changed."
+    },
+    {
+      "path": "diode/GK-SOD-323_BAS70WS-2025.pdf",
+      "title": "BAS70WS",
+      "sha256": "a7ac17c01b99e8dda067c290f888a4ee9c81fe5b36e1d534fe4c3870a5aa92a8",
+      "bytes": 1067107,
+      "variant": "BAS70WS SOD-323",
+      "notes": "Schottky small-signal diode. No vendor URL resolved, so the cached copy is the only copy."
+    },
+    {
+      "path": "load_switch/tps22919.pdf",
+      "title": "TPS22919",
+      "url": "https://www.ti.com/lit/ds/symlink/tps22919.pdf",
+      "sha256": "743c59b01fb0891d2d0f1faba779161cd2d2b6c18edf68e6d5b3279016240c84",
+      "bytes": 1454791,
+      "brand": "Texas Instruments",
+      "variant": "TPS22919DCKR",
+      "notes": "Direct vendor URL, verified byte-identical to the cached copy."
+    },
+    {
+      "path": "microcontroller/stm32l010f4.pdf",
+      "title": "STM32L010F4",
+      "url": "https://www.st.com/resource/en/datasheet/stm32l010f4.pdf",
+      "sha256": "726f3aaf6245710a1ddbeba9b53f104dc0a8abdcd3b220ef119242acc4b89d0e",
+      "bytes": 1877885,
+      "brand": "STMicroelectronics",
+      "variant": "STM32L010F4P6",
+      "digest": "microcontroller/stm32l010f4-tssop20.md",
+      "notes": "URL is ST's standard resource path but could NOT be verified: st.com timed out from this machine when the manifest was built."
+    },
+    {
+      "path": "sensor_component/hdc3020.pdf",
+      "title": "HDC3020",
+      "url": "https://www.ti.com/lit/ds/symlink/hdc3020.pdf",
+      "sha256": "733d31c0cfce545c4caa1e2a3b03ed3ca7191dbc165f171a0e2650b679328cc7",
+      "bytes": 2258738,
+      "brand": "Texas Instruments",
+      "digest": "sensor_component/hdc3020.md",
+      "notes": "Direct vendor URL, verified byte-identical to the cached copy."
+    },
+    {
+      "path": "sensor_component/snaa352a.pdf",
+      "title": "SNAA352A",
+      "url": "https://www.ti.com/lit/an/snaa352a/snaa352a.pdf",
+      "sha256": "f9c23c9644b896f1521d21344ec4d49371c29f43e5948a36b3ae62b8c25e461e",
+      "bytes": 499387,
+      "brand": "Texas Instruments",
+      "notes": "TI application brief: Leveraging Relative Humidity Sensor Enhanced Features for Ultra-Low-Power Systems (Rev. A). Direct vendor URL, verified byte-identical to the cached copy."
+    }
+  ]
+}

@@ -23,3 +23,10 @@ __pycache__/
 
 # KiCad
 fp-info-cache
+
+# Datasheet PDFs are deliberately not tracked. docs/manifest.json is the tracked
+# stand-in: it records where each PDF belongs, what it is and where to get it again.
+# docs/browse.bat opens them, fetching on demand into a cache outside the repo
+# (%LOCALAPPDATA%\temp_sensor\datasheets by default). The Datasheet Browser itself
+# lives in the water_tank checkout; see docs/README.md.
+*.pdf
