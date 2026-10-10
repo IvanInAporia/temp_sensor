@@ -43,7 +43,7 @@ be broken by an edit made for the other.
 python <water_tank>\docs\datasheet_browser\tools\sync_cache.py -m docs\manifest.json fetch
 ```
 
-Five of the six download again from TI or ST. The sixth,
+Six of the seven download again from TI, ST or Tuya. The seventh,
 `diode/GK-SOD-323_BAS70WS-2025.pdf`, has no source URL that could be resolved, so the
 cached copy is the only copy — both the GUI and `sync_cache.py` refuse to re-fetch it
 rather than deleting it first. Back up the cache folder, or add a `url` to its entry

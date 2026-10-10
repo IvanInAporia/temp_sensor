@@ -69,6 +69,17 @@
       "bytes": 499387,
       "brand": "Texas Instruments",
       "notes": "TI application brief: Leveraging Relative Humidity Sensor Enhanced Features for Ultra-Low-Power Systems (Rev. A). Direct vendor URL, verified byte-identical to the cached copy."
+    },
+    {
+      "path": "tuya_module/T3-3S_Module_Datasheet.pdf",
+      "title": "T3-3S",
+      "url": "https://images.tuyacn.com/goat/pdf/01KFHS9Q8CY81DTPTTPPBY8ZQ6/T3%2D3S%20Module%20Datasheet_Tuya%20Developer%20Platform_Tuya%20Developer%20Platform.pdf",
+      "sha256": "13477e83d76c5dfced2e5b6d27d4bd8a6f1c519678ce97b0d8799e620275192e",
+      "bytes": 661028,
+      "brand": "Tuya",
+      "variant": "T3-3S",
+      "digest": "tuya_module/T3-3S_Module_Datasheet.md",
+      "notes": "Tuya Developer Platform PDF export, version 20260122. Direct vendor URL; the cached copy is the one downloaded from it. The digest is Tuya's own Markdown of the same page rather than a house-style summary."
     }
   ]
 }

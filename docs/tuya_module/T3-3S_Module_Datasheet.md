@@ -1,5 +1,8 @@
 # T3-3S Module Datasheet
 
+Source: Tuya Developer Platform, *T3-3S Module Datasheet* (PDF export version 20260122),
+file `T3-3S_Module_Datasheet.pdf`. Images below are hosted on Tuya's CDN.
+
 # T3-3S Module Datasheet
 T3-3S module is a Wi-Fi 6 and Bluetooth Low Energy (LE) combo module developed by Tuya Smart. It is composed of a highly integrated radio-frequency identification (RFID) chip T3 and a few peripheral components. It can run in the station (STA) mode and access point (AP) mode.
 
