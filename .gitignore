@@ -20,3 +20,6 @@ __pycache__/
 !.vscode/settings.json
 !.vscode/extensions.json
 !.vscode/launch.json
+
+# KiCad
+fp-info-cache
