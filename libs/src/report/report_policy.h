@@ -28,7 +28,9 @@
 // on a failed window would stay dropped until the temperature happened to move
 // again. So ReportPolicy_Update() only decides; the value becomes "the last
 // thing the cloud knows" at ReportPolicy_ReportSent(), and a window that got
-// nowhere simply never calls it, leaving the next cycle to try again.
+// nowhere simply never calls it, leaving the change outstanding for the next
+// window. (When that is, after a failure, is the cycle's call: it backs off --
+// temp_sensor_main.c.)
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -43,9 +43,10 @@
 #define WIFI_ALIVE_TIMEOUT_MS (15u * 1000u)
 
 /* Association plus cloud handshake on a healthy network. Past this the window
- * is written off and the report is left uncommitted, so the next cycle retries
+ * is written off and the report is left uncommitted, so a later cycle retries
  * from scratch -- which is the right shape, because the usual reason for
- * missing this deadline is a router that is down. */
+ * missing this deadline is a router that is down. How much later is
+ * REPORT_RETRY_MS. */
 #define WIFI_CLOUD_TIMEOUT_MS (25u * 1000u)
 
 /* A pairing window instead: provisioning takes as long as somebody standing at
@@ -75,6 +76,27 @@
  * that actually saw a press edge. */
 #define BUTTON_DEBOUNCE_MS 50u
 
+/* How long after a report window that never reached the cloud the next one may
+ * open.
+ *
+ * A failed window is the most expensive thing this device does: about 29 s
+ * with the module powered (some 4 s to come alive, then the whole cloud
+ * timeout). With the router down every window fails, and retried on every
+ * cycle that is the module powered ~10 % of the time -- a flat cell in three
+ * or four days.
+ *
+ * So two quick retries, for a router that is rebooting, and then a pause:
+ * three failures in a row says it is down and likely to stay down a while.
+ * Through a long outage that is one window every two hours, about 12 a day.
+ *
+ * Times, not cycles. A shorter CYCLE_PERIOD_MS must not shorten the retry,
+ * which is already about as short as a router takes to come back. */
+#define REPORT_RETRY_MS (5u * 60u * 1000u)
+#define REPORT_PAUSE_MS (2u * 60u * 60u * 1000u)
+
+/* Quick retries before failed report windows start the pause. */
+#define REPORT_RETRIES 2u
+
 static ReportPolicy report_policy;
 
 /* When the next scheduled cycle is due, as a BSP_GetTimeMs() value. Advanced
@@ -82,8 +104,32 @@ static ReportPolicy report_policy;
  * long cycle body does not push the whole series later. */
 static uint32_t next_cycle_ms;
 
+/* Quick retries left before the pause. Only a window that gets through refills
+ * them, so once a pause runs out the device tries once and, if that fails too,
+ * pauses again.
+ *
+ * Kept in RAM, so the board's Reset button is how to make the device try again
+ * right now. The Wi-Fi button is not: it always opens a window, but a pairing
+ * one, which takes the module off its network. */
+static uint8_t report_retries_left;
+
+/* Report windows are held back until next_cycle_ms reaches this.
+ *
+ * On the schedule rather than the clock. On the device a cycle starts a few
+ * milliseconds after its slot, by a different few each time -- the RTC wakeup
+ * and the clock that measures it are both coarse -- so a retry timed off the
+ * clock to land five minutes on would miss the cycle five minutes on whenever
+ * the failed one had started later than that one, and slip a whole period.
+ *
+ * A cycle the button brings forward shares the slot before it, so a report
+ * window that fails in one -- possible only on a press the debounce rejects --
+ * may be retried a little early. Harmless. */
+static uint32_t report_hold_until_ms;
+
 static bool PairingRequested(void);
-static void RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10);
+static bool ReportBackoffOver(void);
+static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10);
+static void UpdateBackoff(bool reached_cloud, bool pairing);
 static void WaitForNextCycle(void);
 
 void TempSensorInit(void)
@@ -94,6 +140,10 @@ void TempSensorInit(void)
     /* The first cycle runs immediately -- the wait is at the end of the body --
      * so the schedule starts one period out. */
     next_cycle_ms = BSP_GetTimeMs() + CYCLE_PERIOD_MS;
+
+    /* No backoff carries over a reset: the first cycle reports. */
+    report_retries_left  = REPORT_RETRIES;
+    report_hold_until_ms = next_cycle_ms;
 }
 
 void TempSensorRun(void)
@@ -141,22 +191,102 @@ void TempSensorRunCycle(void)
      * reading, and the next cycle tries the sensor again. The only thing that
      * still opens a window is the button. */
 
-    if (report_due || pairing)
+    /* Every cycle, report due or not -- ReportBackoffOver says why. */
+    bool backoff_over = ReportBackoffOver();
+
+    /* A report held back by the backoff is not lost. Nothing was committed, so
+     * the policy still finds it outstanding once the backoff runs out, and the
+     * readings above are cached for a pairing window in the meantime. The
+     * button is never held back -- though its window only ends the backoff if
+     * it gets through (UpdateBackoff). */
+    if ((report_due && backoff_over) || pairing)
     {
-        RunWifiWindow(report_due, pairing, temp_c10);
+        bool reached_cloud = RunWifiWindow(report_due, pairing, temp_c10);
+
+        UpdateBackoff(reached_cloud, pairing);
     }
 
     WaitForNextCycle();
 }
 
-/* One report and/or pairing window, start to finish.
+/* Whether a report window may open in this cycle -- which it may, except while
+ * a retry wait or the pause after failed windows is still running.
+ *
+ * Called on every cycle, report due or not, for the sake of what it does on
+ * the way out.
+ */
+static bool ReportBackoffOver(void)
+{
+    /* Unsigned subtraction, as in WaitForNextCycle: a deadline already behind
+     * us wraps to a huge number, so "more left than the longest wait there is"
+     * is how a passed deadline shows up. */
+    uint32_t remaining_ms = report_hold_until_ms - next_cycle_ms;
+
+    if ((remaining_ms != 0u) && (remaining_ms <= REPORT_PAUSE_MS))
+    {
+        return false;
+    }
+
+    /* Over, so brought up to now. Left where it was, a passed deadline would
+     * fall further behind on every quiet cycle, and some 49.7 days on the clock
+     * would wrap round to it and read it as a pause just started. */
+    report_hold_until_ms = next_cycle_ms;
+
+    return true;
+}
+
+/* After a window: one that got through clears the backoff, a failed report
+ * window extends it.
+ */
+static void UpdateBackoff(bool reached_cloud, bool pairing)
+{
+    if (reached_cloud)
+    {
+        /* Whatever kind of window it was: the network works, and anything that
+         * was outstanding has just been delivered with it. */
+        report_retries_left  = REPORT_RETRIES;
+        report_hold_until_ms = next_cycle_ms;
+
+        return;
+    }
+
+    if (pairing)
+    {
+        /* Says nothing about the router -- the module spent the window waiting
+         * for a phone, not trying its network -- so it neither counts as a
+         * failure nor ends a pause. */
+        return;
+    }
+
+    uint32_t wait_ms;
+
+    if (report_retries_left > 0u)
+    {
+        report_retries_left--;
+        wait_ms = REPORT_RETRY_MS;
+    }
+    else
+    {
+        wait_ms = REPORT_PAUSE_MS;
+    }
+
+    /* From this cycle's slot, not from when the window gave up: timed from
+     * ~29 s later, the first retry would miss the next cycle at today's period
+     * and wait out one more. */
+    report_hold_until_ms = next_cycle_ms + wait_ms;
+}
+
+/* One report and/or pairing window, start to finish. Returns whether the
+ * module reached the cloud.
  *
  * Every step has a deadline and every exit path goes through Tuya_PowerOff(),
  * because leaving the module powered is the one mistake that empties the cell
  * outright -- tens of milliamps against a budget built on microamps.
  */
-static void RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
+static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
 {
+    bool reached_cloud = false;
+
     Tuya_PowerOn();
 
     if (Tuya_WaitUntil(Tuya_IsAlive, WIFI_ALIVE_TIMEOUT_MS))
@@ -189,10 +319,14 @@ static void RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
             {
                 ReportPolicy_ReportSent(&report_policy, temp_c10);
             }
+
+            reached_cloud = true;
         }
     }
 
     Tuya_PowerOff();
+
+    return reached_cloud;
 }
 
 static bool PairingRequested(void)

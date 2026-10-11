@@ -25,6 +25,14 @@ namespace {
 
 constexpr uint32_t kCyclePeriodMs = 5u * 60u * 1000u;
 
+// The backoff after failed report windows: two retries this far apart...
+constexpr uint32_t kRetryMs = 5u * 60u * 1000u;
+
+// ...then this long between tries until one gets through.
+constexpr uint32_t kPauseMs        = 2u * 60u * 60u * 1000u;
+constexpr int      kCyclesPerPause = static_cast<int>(kPauseMs / kCyclePeriodMs);
+constexpr int      kCyclesPerDay   = static_cast<int>(24u * 60u * 60u * 1000u / kCyclePeriodMs);
+
 // How many wifi_uart_service() calls the scripted module takes to boot and to
 // reach the cloud. The glue services once per poll, so these are "polls", and
 // they are small so a test runs in microseconds.
@@ -74,12 +82,39 @@ protected:
         }
     }
 
+    // How many windows the next `n` cycles open.
+    int WindowsDuring(int n)
+    {
+        int before = WindowsOpened();
+        RunCycles(n);
+        return WindowsOpened() - before;
+    }
+
     // Settle the median window at a temperature, with reports delivered.
     void SettleAt(int16_t temp_c10)
     {
         ModuleReachesCloud();
         StageReading(temp_c10, 55u);
         RunCycles(3);
+    }
+
+    // Settle at 23.4 C, take the router down, and let the temperature step to
+    // 28.0 C. Returns with the report due on the very next cycle.
+    void RouterDownWithAChangeToReport()
+    {
+        SettleAt(234);
+        ModuleBootsButNeverConnects();
+        StageReading(280, 55u);
+        RunCycles(1); // one cycle of median lag
+    }
+
+    // ...and run until the third failed window has started the pause. Returns
+    // when that window opened.
+    uint32_t PausedAfterThreeFailures()
+    {
+        RouterDownWithAChangeToReport();
+        EXPECT_EQ(3, WindowsDuring(3));
+        return bspMockWifiLastPowerOnMs();
     }
 };
 
@@ -506,6 +541,149 @@ TEST_F(TempSensorMainTest, StopsRetryingOnceTheReportLands)
     RunCycles(10);
 
     EXPECT_EQ(windows, WindowsOpened());
+}
+
+// --- Backing off after failed windows -------------------------------------
+//
+// A failed window keeps the module powered for about 29 s, and with the
+// router down every window fails. Retried on every cycle, that is ~10 % of
+// the time at tens of milliamps -- a flat cell in three or four days.
+
+TEST_F(TempSensorMainTest, RetriesTwiceFiveMinutesApartThenPausesForTwoHours)
+{
+    RouterDownWithAChangeToReport();
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    uint32_t first_ms = bspMockWifiLastPowerOnMs();
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(first_ms + kRetryMs, bspMockWifiLastPowerOnMs());
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    uint32_t third_ms = bspMockWifiLastPowerOnMs();
+    EXPECT_EQ(first_ms + 2u * kRetryMs, third_ms);
+
+    // Three in a row says the router is down and likely to stay down. The
+    // radio stays off through the pause, but the measuring carries on.
+    int reads_before = bspMockSensorWriteCalls();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    EXPECT_EQ(reads_before + kCyclesPerPause - 1, bspMockSensorWriteCalls());
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(third_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, AFailureAfterThePauseStartsAnotherPause)
+{
+    // The count stops at three and only a success clears it, so the try at
+    // the end of a pause gets no retries of its own.
+    PausedAfterThreeFailures();
+    RunCycles(kCyclesPerPause - 1);
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    uint32_t try_ms = bspMockWifiLastPowerOnMs();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(try_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, ALongOutageCostsAWindowEveryTwoHours)
+{
+    PausedAfterThreeFailures();
+
+    EXPECT_EQ(12, WindowsDuring(kCyclesPerDay));
+}
+
+TEST_F(TempSensorMainTest, AReportThatGetsThroughGivesTheRetriesBack)
+{
+    RouterDownWithAChangeToReport();
+    ASSERT_EQ(2, WindowsDuring(2)); // two failures use up both retries...
+
+    ModuleReachesCloud();
+    ASSERT_EQ(1, WindowsDuring(1)); // ...and the third try gets through
+
+    // The router goes down again. Without its retries back, the next change
+    // would get one window and then a pause; with them, it gets three.
+    ModuleBootsButNeverConnects();
+    StageReading(330, 55u);
+    RunCycles(1); // one cycle of median lag
+
+    EXPECT_EQ(3, WindowsDuring(3));
+    EXPECT_EQ(0, WindowsDuring(1));
+}
+
+TEST_F(TempSensorMainTest, TheRetriesAfterBootBackOffTheSameWay)
+{
+    // Until the first report lands there is nothing committed, so the policy
+    // asks for one on every cycle. A device switched on with the router down
+    // must not take that as licence to try every five minutes.
+    ModuleBootsButNeverConnects();
+
+    ASSERT_EQ(3, WindowsDuring(3));
+    uint32_t third_ms = bspMockWifiLastPowerOnMs();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(third_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, TheButtonStillOpensAWindowDuringThePause)
+{
+    uint32_t third_ms = PausedAfterThreeFailures();
+    RunCycles(2);
+
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+
+    // A pairing window, not a "retry now" -- and one that nobody paired says
+    // nothing about the router, so the pause neither ends early nor starts
+    // over. The next report window opens when it would have anyway.
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 4));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(third_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, APairingWindowThatGetsThroughEndsThePause)
+{
+    PausedAfterThreeFailures();
+
+    // Readings taken during the pause are cached as usual, so the pairing
+    // window pushes those and not the ones the pause started with.
+    StageReading(300, 60u);
+    RunCycles(2);
+
+    ModuleReachesCloud();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_TEMP_CURRENT, &value));
+    EXPECT_NEAR(300, static_cast<int32_t>(value), 1);
+
+    // It got through, so the network works: the next change goes out at once,
+    // not when the pause would have run out.
+    StageReading(350, 60u);
+    EXPECT_EQ(1, WindowsDuring(2)); // one cycle of median lag, then the report
+}
+
+TEST_F(TempSensorMainTest, ALateWakeDoesNotPushTheRetryACycleLater)
+{
+    // On the device a cycle starts a few milliseconds after it was due, by a
+    // different few each time. A retry timed off the clock would miss the
+    // cycle five minutes on whenever the failed one had started later than
+    // that one, and wait out a whole extra period.
+    RouterDownWithAChangeToReport();
+
+    bspMockAdvanceMs(3u);           // this cycle wakes a little late...
+    ASSERT_EQ(1, WindowsDuring(1)); // ...and its window fails
+
+    EXPECT_EQ(1, WindowsDuring(1)); // the next, on time, still retries
 }
 
 } // namespace

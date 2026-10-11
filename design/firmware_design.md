@@ -40,7 +40,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (67 tests) over the same C
+libs/test/                  host GoogleTest suite (75 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -113,7 +113,7 @@ cloud" costs interrupt wakeups rather than a spin.
 
 **The rule that keeps this honest: every wait has a deadline.** Nothing may wait
 on the module forever. It is a separate processor on the far end of a UART with no
-reset line; if it never answers, the cycle ends and tries again in five minutes.
+reset line; if it never answers, the cycle ends and a later one tries again (§4).
 
 ## 4. Why measuring and reporting are priced differently
 
@@ -142,6 +142,37 @@ rarely. The rule, in [`report_policy.h`](../libs/src/report/report_policy.h):
 never reached the cloud simply never commits, so the next cycle still finds the
 change outstanding. Without a heartbeat there is nothing else that would ever
 repair a dropped report — in a stable room it could be lost for good.
+
+### Backing off after failed windows
+
+A failed window is the most expensive thing the device does: about 29 s with the
+module powered (~4 s to alive, then the 25 s cloud timeout). With the router down
+every window fails, and retrying the outstanding report on every cycle would keep
+the module powered ~10 % of the time — a flat cell in three or four days. So
+[`temp_sensor_main.c`](../temp_sensor_main/temp_sensor_main.c) retries twice and
+then pauses:
+
+| Failed report windows in a row | Next report window no earlier than |
+|---|---|
+| 1 or 2 | 5 min after the failed one (`REPORT_RETRY_MS`) |
+| 3 | 2 h after it (`REPORT_PAUSE_MS`) |
+
+- **Only a window that reaches the cloud gives the retries back.** The try at the
+  end of a pause gets none of its own, so a long outage costs one window every
+  2 h, about 12 a day. The retries after boot follow the same rules.
+- **A held-back report is not lost.** Nothing was committed, so it is still
+  outstanding when the backoff runs out. The cycle keeps measuring and caching
+  throughout.
+- **The Wi-Fi button always opens a window, but not a "retry now".** It opens a
+  pairing window. One that reaches the cloud clears the backoff; one that doesn't
+  changes nothing, because the module spent it waiting for a phone and never tried
+  the router.
+- **The Reset button is "retry now".** The backoff lives in RAM, so after a reset
+  the first cycle reports.
+- **Times, not cycles**, so a shorter cycle period cannot shorten the retry. They
+  are measured on the schedule (`next_cycle_ms`), not off the clock. A cycle
+  starts a few ms after its slot, by a different few each time, and a retry timed
+  off the clock would miss the next cycle about half the time.
 
 ## 5. Power
 
@@ -184,11 +215,11 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  12400       8    1592   14000    36b0
+  12484       8    1600   14092    370c
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~576 bytes and the stack has ~1470 available. Flash is 12.4 KB of
+static RAM is ~584 bytes and the stack has ~1465 available. Flash is 12.5 KB of
 16 KB, leaving ~3.9 KB. (The same tree at `-O2` is 13.6 KB of text — it fits, but
 with half the headroom.)
 
@@ -239,7 +270,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 67 GoogleTest cases, ~2.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 75 GoogleTest cases, ~2.6 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 

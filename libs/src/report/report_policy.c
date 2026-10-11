@@ -80,9 +80,9 @@ bool ReportPolicy_Update(ReportPolicy* policy, int16_t temp_c10, int16_t* filter
     {
         /* Nothing has ever reached the cloud, so there is nothing to compare
          * against and no threshold that could be crossed. Report, and keep
-         * reporting every cycle until one of them gets through: without a
-         * heartbeat this is the only thing that puts a device in a stable room
-         * on the map at all.
+         * asking every cycle until one gets through (how often the cycle
+         * actually tries is its own backoff): without a heartbeat this is the
+         * only thing that puts a device in a stable room on the map at all.
          *
          * If this first sample happens to be a spike it corrects itself once
          * the window fills, which is a far smaller problem than starting up

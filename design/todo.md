@@ -19,7 +19,7 @@ Suggested order: 1a → 1b → 1c → 2 → 4. Items 3 and 5 don't depend on any
 
 ## 1a. Back off after failed windows
 
-- [ ] Done
+- [x] Done
 
 **Problem.** A window that never reaches the cloud leaves the report uncommitted, so the
 next cycle tries again five minutes later. The same happens after boot until the first
