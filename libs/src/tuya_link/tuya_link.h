@@ -78,6 +78,15 @@ bool Tuya_IsAlive(void);
  */
 bool Tuya_IsCloudConnected(void);
 
+/* True while the module says it is waiting to be paired -- it never was, or it
+ * was removed in the app -- so it has no network to try and will not reach the
+ * cloud however long it is given.
+ *
+ * Known from Tuya_IsAlive() on: the module's first state report is what says
+ * so. False before that, when nothing is known yet.
+ */
+bool Tuya_IsUnpaired(void);
+
 /* Put the module into pairing mode. Requires Tuya_IsAlive().
  *
  * Sends the reset command, on which the module restarts into pairing over

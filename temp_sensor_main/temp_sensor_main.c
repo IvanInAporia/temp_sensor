@@ -126,6 +126,16 @@ static uint8_t report_retries_left;
  * may be retried a little early. Harmless. */
 static uint32_t report_hold_until_ms;
 
+/* A report window found the module waiting to be paired: it never was, or it
+ * was removed in the app. No report window opens while this is set -- each
+ * would only find the module still waiting -- not even the ones the policy
+ * keeps asking for until the first report after boot lands. Only a pairing
+ * window that gets through clears it.
+ *
+ * In RAM, like the backoff. After a reset the first report window finds out
+ * again, at the cost of the ~4 s the module takes to say so. */
+static bool module_unpaired;
+
 static bool PairingRequested(void);
 static bool ReportBackoffOver(void);
 static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10);
@@ -141,9 +151,11 @@ void TempSensorInit(void)
      * so the schedule starts one period out. */
     next_cycle_ms = BSP_GetTimeMs() + CYCLE_PERIOD_MS;
 
-    /* No backoff carries over a reset: the first cycle reports. */
+    /* No backoff carries over a reset, and no pairing state: the first cycle
+     * reports, or finds out the module has nowhere to report to. */
     report_retries_left  = REPORT_RETRIES;
     report_hold_until_ms = next_cycle_ms;
+    module_unpaired      = false;
 }
 
 void TempSensorRun(void)
@@ -194,12 +206,12 @@ void TempSensorRunCycle(void)
     /* Every cycle, report due or not -- ReportBackoffOver says why. */
     bool backoff_over = ReportBackoffOver();
 
-    /* A report held back by the backoff is not lost. Nothing was committed, so
-     * the policy still finds it outstanding once the backoff runs out, and the
-     * readings above are cached for a pairing window in the meantime. The
-     * button is never held back -- though its window only ends the backoff if
-     * it gets through (UpdateBackoff). */
-    if ((report_due && backoff_over) || pairing)
+    /* A report held back -- by the backoff, or because the module is unpaired
+     * -- is not lost. Nothing was committed, so the policy still finds it
+     * outstanding once the hold ends, and the readings above are cached for a
+     * pairing window in the meantime. The button is never held back -- though
+     * its window only ends either hold if it gets through. */
+    if ((report_due && backoff_over && !module_unpaired) || pairing)
     {
         bool reached_cloud = RunWifiWindow(report_due, pairing, temp_c10);
 
@@ -291,36 +303,52 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
 
     if (Tuya_WaitUntil(Tuya_IsAlive, WIFI_ALIVE_TIMEOUT_MS))
     {
-        if (pairing)
+        if (!pairing && Tuya_IsUnpaired())
         {
-            /* Only now: this is a plain transmit, and one sent into a module
-             * that has not finished booting is simply lost. */
-            Tuya_StartPairing();
+            /* No network to try, so the cloud timeout would be waited out for
+             * nothing: the window ends here, some 4 s in rather than 29.
+             *
+             * UpdateBackoff counts it as a failed window. That is never seen:
+             * only a window that gets through clears module_unpaired, and that
+             * clears the backoff too. */
+            module_unpaired = true;
         }
-
-        uint32_t cloud_timeout_ms = pairing ? WIFI_PAIRING_TIMEOUT_MS : WIFI_CLOUD_TIMEOUT_MS;
-
-        if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms))
+        else
         {
-            /* Unconditional, not gated on report_due: the cloud is up and the
-             * cached readings are this cycle's, so a pairing window pushes the
-             * current state too. That is what makes the button confirm to
-             * whoever pressed it that the device works. */
-            Tuya_ReportCachedDps();
-
-            Tuya_ServiceFor(pairing ? WIFI_PAIRING_DRAIN_MS : WIFI_DRAIN_MS);
-
-            /* Committed only here, on the one path where the value reached the
-             * cloud. Every other way out of this function leaves the policy
-             * alone, so the next cycle still finds the change outstanding and
-             * tries again -- which matters because there is no heartbeat to
-             * repair a dropped report later. */
-            if (report_due)
+            if (pairing)
             {
-                ReportPolicy_ReportSent(&report_policy, temp_c10);
+                /* Only now: this is a plain transmit, and one sent into a
+                 * module that has not finished booting is simply lost. */
+                Tuya_StartPairing();
             }
 
-            reached_cloud = true;
+            uint32_t cloud_timeout_ms = pairing ? WIFI_PAIRING_TIMEOUT_MS : WIFI_CLOUD_TIMEOUT_MS;
+
+            if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms))
+            {
+                /* Unconditional, not gated on report_due: the cloud is up and
+                 * the cached readings are this cycle's, so a pairing window
+                 * pushes the current state too. That is what makes the button
+                 * confirm to whoever pressed it that the device works. */
+                Tuya_ReportCachedDps();
+
+                Tuya_ServiceFor(pairing ? WIFI_PAIRING_DRAIN_MS : WIFI_DRAIN_MS);
+
+                /* Committed only here, on the one path where the value reached
+                 * the cloud. Every other way out of this function leaves the
+                 * policy alone, so the next cycle still finds the change
+                 * outstanding and tries again -- which matters because there
+                 * is no heartbeat to repair a dropped report later. */
+                if (report_due)
+                {
+                    ReportPolicy_ReportSent(&report_policy, temp_c10);
+                }
+
+                /* Paired, whatever an earlier window found. While the flag is
+                 * set only a pairing window gets this far. */
+                module_unpaired = false;
+                reached_cloud   = true;
+            }
         }
     }
 

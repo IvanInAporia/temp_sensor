@@ -19,7 +19,8 @@ has moved enough to be worth telling anyone, and if so bring up the Wi-Fi module
 report four datapoints, and put it away again. Then sleep.
 
 A press of the Wi-Fi button opens the same window for pairing instead, and can
-interrupt the sleep to do it.
+interrupt the sleep to do it. A device that isn't paired opens no report windows
+at all until the button pairs it (§4).
 
 **There is no heartbeat.** A temperature that never moves is never reported, and
 the Tuya app keeps showing the last value it was given. This is deliberate — see
@@ -40,7 +41,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (75 tests) over the same C
+libs/test/                  host GoogleTest suite (83 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -174,6 +175,29 @@ then pauses:
   starts a few ms after its slot, by a different few each time, and a retry timed
   off the clock would miss the next cycle about half the time.
 
+### Not reporting while unpaired
+
+A module that was never paired, or was removed in the app, has no network to try,
+so a report window would wait out the whole cloud timeout for nothing. Until the
+first report after boot lands, the policy asks for one on every cycle, so the
+backoff alone would still spend about 12 of those windows a day.
+
+The module's first state report says whether it is paired. `SMART_CONFIG_STATE`
+(0x00), `AP_STATE` (0x01) and `SMART_AND_AP_STATE` (0x06) mean it is waiting to
+be paired (`Tuya_IsUnpaired()`). A router that is down looks different: the
+module reports 0x02 and gets the backoff instead.
+
+- **A report window that finds the module unpaired powers off at once**, about
+  4 s in rather than 29, and sets `module_unpaired`.
+- **While it is set, no report window opens**, including the retries after boot.
+  The cycle keeps measuring and caching, so a pairing window has current values
+  to push.
+- **Only a pairing window that reaches the cloud clears it.** One that nobody
+  finishes leaves it set. A pairing window is never cut short this way, since
+  waiting to be paired is what it is for.
+- **It lives in RAM.** After a reset or a battery swap, the first report window
+  finds out again, at the cost of one ~4 s window. No EEPROM needed.
+
 ## 5. Power
 
 All datasheet figures; none of this has been measured on the board yet.
@@ -215,12 +239,12 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  12484       8    1600   14092    370c
+  12516       8    1608   14132    3734
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~584 bytes and the stack has ~1465 available. Flash is 12.5 KB of
-16 KB, leaving ~3.9 KB. (The same tree at `-O2` is 13.6 KB of text — it fits, but
+static RAM is ~592 bytes and the stack has ~1456 available. Flash is 12.5 KB of
+16 KB, leaving ~3.8 KB. (The same tree at `-O2` is 13.6 KB of text — it fits, but
 with half the headroom.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
@@ -270,7 +294,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 75 GoogleTest cases, ~2.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 83 GoogleTest cases, ~2.6 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -314,3 +338,16 @@ that `WIFI_ALIVE_TIMEOUT_MS` and `WIFI_CLOUD_TIMEOUT_MS` are sized from. The onl
 data so far is a Tuya MCU-simulator capture of a first pairing: ~3 s from the
 module's first heartbeat to its first state report, and ~9 s from "configured" to
 "cloud" — which is why the alive timeout is 15 s.
+
+Not yet checked on hardware either: what state the module reports on the boot after
+a pairing window nobody finished. Not reporting while unpaired (§4) relies on two
+things:
+
+- **A module with no network** should come back in a pairing state (0x00, 0x01 or
+  0x06), not 0x02. If it reports 0x02, it looks like a down router and gets the
+  backoff: about 12 full 29 s windows a day instead of none.
+- **A module that was paired** must not. The pairing window cuts power at about
+  the moment anti-misoperation mode would restore the old network. Tuya documents
+  that a power cycle after a reset and before re-pairing also restores it. If this
+  module firmware doesn't, a stray press would leave a paired device silent until
+  someone pairs it again.

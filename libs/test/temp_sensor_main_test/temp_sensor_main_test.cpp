@@ -72,6 +72,10 @@ protected:
     // The module is dead: unpowered, unflashed, or the UART is miswired.
     void ModuleNeverAnswers() { tuyaSdkMockSetWifiState(WIFI_SATE_UNKNOW); }
 
+    // The module boots waiting to be paired: it never was, or it was removed
+    // in the app. AP_STATE is what the simulator capture shows.
+    void ModuleIsUnpaired() { tuyaSdkMockSetWifiStateAfter(kBootCalls, AP_STATE); }
+
     int WindowsOpened() const { return bspMockWifiPowerOnCalls(); }
 
     void RunCycles(int n)
@@ -684,6 +688,130 @@ TEST_F(TempSensorMainTest, ALateWakeDoesNotPushTheRetryACycleLater)
     ASSERT_EQ(1, WindowsDuring(1)); // ...and its window fails
 
     EXPECT_EQ(1, WindowsDuring(1)); // the next, on time, still retries
+}
+
+// --- An unpaired module ---------------------------------------------------
+//
+// A module that was never paired, or was removed in the app, has no network to
+// try. A report window would wait out the whole cloud timeout for nothing, and
+// until the first report after boot lands, one is due on every cycle.
+
+TEST_F(TempSensorMainTest, AReportWindowEndsAsSoonAsTheModuleSaysItIsUnpaired)
+{
+    ModuleIsUnpaired();
+    ASSERT_EQ(1, WindowsDuring(1));
+
+    // Its first state report says so, some 4 s in on the device. Nothing in
+    // the cloud timeout after that could change it.
+    EXPECT_LT(bspMockWifiLastWindowMs(), 1000u);
+    EXPECT_FALSE(bspMockWifiIsPowered());
+}
+
+TEST_F(TempSensorMainTest, AnUnpairedDeviceOpensNoMoreReportWindows)
+{
+    // Not even the retries after boot, which the backoff alone would still
+    // allow about 12 times a day.
+    ModuleIsUnpaired();
+    ASSERT_EQ(1, WindowsDuring(1));
+
+    int reads_before = bspMockSensorWriteCalls();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+    EXPECT_EQ(reads_before + kCyclesPerDay, bspMockSensorWriteCalls()); // still measuring
+}
+
+TEST_F(TempSensorMainTest, ADeviceRemovedInTheAppStopsReporting)
+{
+    SettleAt(234);
+
+    // The module comes back from its next boot waiting to be paired. The next
+    // change finds that out, in one short window...
+    ModuleIsUnpaired();
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2)); // one cycle of median lag, then the report
+    EXPECT_LT(bspMockWifiLastWindowMs(), 1000u);
+
+    // ...and no change after it opens another.
+    StageReading(320, 55u);
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+}
+
+TEST_F(TempSensorMainTest, AnyOfThePairingModesCountsAsUnpaired)
+{
+    // Which one the module reports depends on how it was set to pair:
+    // SmartConfig, AP, or both at once.
+    const uint8_t states[] = {SMART_CONFIG_STATE, AP_STATE, SMART_AND_AP_STATE};
+
+    for (uint8_t state : states)
+    {
+        TempSensorInit();
+        tuyaSdkMockSetWifiStateAfter(kBootCalls, state);
+
+        EXPECT_EQ(1, WindowsDuring(3)) << "state " << static_cast<int>(state);
+    }
+}
+
+TEST_F(TempSensorMainTest, APairingWindowIsNotCutShortByAnUnpairedModule)
+{
+    // Waiting to be paired is what a pairing window is for.
+    ModuleIsUnpaired();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+    EXPECT_GE(bspMockWifiLastWindowMs(), 3u * 60u * 1000u); // the whole pairing timeout
+}
+
+TEST_F(TempSensorMainTest, APairingWindowNobodyFinishesLeavesTheDeviceUnpaired)
+{
+    ModuleIsUnpaired();
+    RunCycles(1);
+
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+}
+
+TEST_F(TempSensorMainTest, PairingTheDeviceLetsItReportAgain)
+{
+    ModuleIsUnpaired();
+    RunCycles(1);
+
+    // Readings are cached throughout, so the pairing window pushes the current
+    // ones...
+    StageReading(300, 60u);
+    RunCycles(2);
+
+    ModuleReachesCloud();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_TEMP_CURRENT, &value));
+    EXPECT_NEAR(300, static_cast<int32_t>(value), 1);
+
+    // ...and from then on a change is reported as usual.
+    StageReading(350, 60u);
+    EXPECT_EQ(1, WindowsDuring(2)); // one cycle of median lag, then the report
+}
+
+TEST_F(TempSensorMainTest, AResetFindsOutAgainWithOneShortWindow)
+{
+    // Kept in RAM, so a battery swap forgets it. Finding out again costs one
+    // window of a few seconds, which is why it is not worth the EEPROM.
+    ModuleIsUnpaired();
+    ASSERT_EQ(1, WindowsDuring(1));
+    ASSERT_EQ(0, WindowsDuring(3));
+
+    TempSensorInit(); // the MCU resets; the module is still unpaired
+
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_LT(bspMockWifiLastWindowMs(), 1000u);
+    EXPECT_EQ(0, WindowsDuring(3));
 }
 
 } // namespace

@@ -60,7 +60,7 @@ has to return whether the window succeeded). Add tests in
 
 ## 1b. Leave an unpaired module unpowered until the button is pressed
 
-- [ ] Done
+- [x] Done
 
 **Problem.** A device that was never paired, or was removed in the app, still opens a
 report window on every cycle and waits out the full cloud timeout.
@@ -82,9 +82,12 @@ capture (`temp_sensor_provision_with_mcu_simulation.txt`), an unpaired module re
 - After a battery swap (MCU reset) the device learns the state again with one short window
   of about 4 s. No EEPROM needed.
 
-**Check on hardware.** What state does a module in anti-misoperation mode (`CONFIG_MODE_SPECIAL`)
-report after a pairing window times out with no previous network? It should be 0x00/0x01/0x06,
-not 0x02.
+**Check on hardware** (still open, also in firmware_design.md section 10). What state does a
+module in anti-misoperation mode (`CONFIG_MODE_SPECIAL`) report after a pairing window times
+out with no previous network? It should be 0x00/0x01/0x06, not 0x02. And the converse: a
+module that *was* paired must come back on its old network after a pairing window nobody
+finished. That window cuts power at about the moment the module would restore. Tuya says a
+power cycle restores it too; if 3.0.93 doesn't, a stray press silences the device.
 
 ## 1c. Detect router-down early with staged deadlines
 

@@ -143,6 +143,16 @@ bool Tuya_IsCloudConnected(void)
     return (mcu_get_wifi_work_state() == WIFI_CONN_CLOUD);
 }
 
+bool Tuya_IsUnpaired(void)
+{
+    /* The three pairing modes. A module that has a network reports 0x02
+     * (WIFI_NOT_CONNECTED) and up instead, even when it cannot reach that
+     * network -- a router that is down looks like that, not like this. */
+    uint8_t state = mcu_get_wifi_work_state();
+
+    return (state == SMART_CONFIG_STATE) || (state == AP_STATE) || (state == SMART_AND_AP_STATE);
+}
+
 void Tuya_StartPairing(void)
 {
     /* Reset (0x04), not "reset and select mode" (0x05): 0x05 picks between the
