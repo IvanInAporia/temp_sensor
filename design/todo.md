@@ -16,6 +16,10 @@ tick it off here.
 Suggested order: 1a → 1b → 1c → 2 → 4. Item 5 doesn't depend on anything. Item 3 was
 dropped on 2026-10-11; item 2's 4 h report covers it.
 
+The checks that need the board, the Tuya app or the MCU simulator are collected in
+[Hardware and manual checks](#hardware-and-manual-checks) at the end, to do once the code
+changes are in.
+
 ---
 
 ## 1a. Back off after failed windows
@@ -82,12 +86,8 @@ capture (`temp_sensor_provision_with_mcu_simulation.txt`), an unpaired module re
 - After a battery swap (MCU reset) the device learns the state again with one short window
   of about 4 s. No EEPROM needed.
 
-**Check on hardware** (still open, also in firmware_design.md section 10). What state does a
-module in anti-misoperation mode (`CONFIG_MODE_SPECIAL`) report after a pairing window times
-out with no previous network? It should be 0x00/0x01/0x06, not 0x02. And the converse: a
-module that *was* paired must come back on its old network after a pairing window nobody
-finished. That window cuts power at about the moment the module would restore. Tuya says a
-power cycle restores it too; if 3.0.93 doesn't, a stray press silences the device.
+**Check on hardware:** the state an unfinished pairing window leaves, in
+[Hardware and manual checks](#hardware-and-manual-checks).
 
 ## 1c. Detect router-down early with staged deadlines
 
@@ -109,11 +109,10 @@ previous step finished:
 With these numbers, a down router gives up about 14 s after power-on instead of 29 s, and a
 down internet connection about 22 s after.
 
-**Measure first.** These timeouts are guesses until measured. The only data is the
-first-pairing capture: about 3 s from first heartbeat to first status, 5.4 s from 0x02 to
-0x03 and 3.7 s from 0x03 to 0x04. A **cold boot of an already-paired module** with this
-firmware hasn't been timed (firmware_design.md section 10). Log the timestamps of each state
-change over 10–20 cold boots and set each timeout to about 2× the worst value seen.
+**These timeouts are guesses.** Implement with them; the cold-boot timing in
+[Hardware and manual checks](#hardware-and-manual-checks) sets the final values. Until then,
+a timeout that is too short shows up as report windows failing on a working network.
+
 ---
 
 ## 2. Limit how often temperature reports go out, and report at least every 4 h
@@ -124,9 +123,8 @@ change over 10–20 cold boots and set each timeout to about 2× the worst value
 - *Too many.* Reporting whenever the temperature moves 0.3 °C keeps the reading within
   0.3 °C, but the number of reports per day has no limit. A heating/cooling cycle that
   swings 0.5–1 °C every 20–40 min can cross 0.3 °C several times per cycle, which adds up
-  to 100+ reports a day. Before starting, check the actual reports per day in the Tuya app
-  history. That number also tests the field-run guess (see the Eneloop notes) that the
-  battery is draining faster than expected.
+  to 100+ reports a day. How many actually go out is one of the
+  [Hardware and manual checks](#hardware-and-manual-checks).
 - *Too few.* A room that holds within 0.3 °C (little ventilation, say) sends nothing for
   hours, or at all. The app can't tell a steady room from a dead device, and the battery
   state never goes out either.
@@ -260,6 +258,56 @@ soon as the ack arrives instead of waiting the fixed 2 s.
   cloud-connected).
 - `RunWifiWindow` commits only on a successful ack, then powers off.
 
-**Check first.** Does T3 module firmware 3.0.93 answer 0x22? If it ignores the command,
-this item reduces to the fallback and isn't worth the code. Test it with the Tuya MCU
-simulator or a logic capture before writing anything else.
+**Check on hardware:** whether module firmware 3.0.93 answers 0x22 at all, in
+[Hardware and manual checks](#hardware-and-manual-checks).
+
+---
+
+## Hardware and manual checks
+
+Do these once the code changes above are in. Each needs the board, the Tuya app or the Tuya
+MCU simulator, so they are batched here rather than interrupting the items. Each says what
+to change if the result is wrong.
+
+### 1b: the state an unfinished pairing window leaves
+
+- [ ] Done
+
+Also in firmware_design.md section 10. Not reporting while unpaired relies on the state the
+module reports on the boot after a pairing window nobody finished:
+- **No previous network.** A module in anti-misoperation mode (`CONFIG_MODE_SPECIAL`) should
+  come back in a pairing state, 0x00/0x01/0x06, not 0x02. If it reports 0x02, the unpaired
+  flag never sets and the device gets the backoff instead: about 12 full windows a day
+  rather than none.
+- **Previously paired.** The module must come back on its old network. The pairing window
+  cuts power at about the moment the module would restore it. Tuya says a power cycle
+  restores it too; if 3.0.93 doesn't, a stray press silences the device until it is paired
+  again.
+
+### 1c: cold-boot timing of a paired module
+
+- [ ] Done
+
+The staged timeouts are guesses. The only data is the first-pairing capture: about 3 s from
+first heartbeat to first status, 5.4 s from 0x02 to 0x03 and 3.7 s from 0x03 to 0x04. A
+**cold boot of an already-paired module** with this firmware hasn't been timed
+(firmware_design.md section 10). Log the timestamps of each state change over 10–20 cold
+boots and set each timeout to about 2× the worst value seen.
+
+### 2: reports per day in the Tuya app history
+
+- [ ] Done
+
+Count the reports per day the old firmware sent. That number tests the field-run guess (see
+the Eneloop notes) that the battery is draining faster than expected, and shows what the
+hold-off saves. If the app's history is short, take this count before flashing item 2.
+Count again after, to see the new rules working: no more than 48 small-change reports a day,
+and no gap longer than about 4 h.
+
+### 5: does module firmware 3.0.93 answer 0x22?
+
+- [ ] Done
+
+Test it with the Tuya MCU simulator or a logic capture. If the module ignores the command,
+every window falls back to committing on cloud-connected, so item 5's code adds nothing and
+is worth taking back out.
