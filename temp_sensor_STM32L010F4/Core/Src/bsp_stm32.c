@@ -83,6 +83,12 @@ extern __IO uint32_t uwTick;
 
 #define ADC_POLL_TIMEOUT_MS 10u
 
+/* The lowest there is (SysTick shares it). The sag monitor's interrupt is the
+ * one that can always wait: in wait mode the converter holds the next result
+ * until this one is read, so a late interrupt costs a gap in the sampling and
+ * never a wrong value -- see ADC1_IRQHandler. */
+#define SAG_MONITOR_IRQ_PRIORITY 3u
+
 /* --- State ---------------------------------------------------------------- */
 
 /* Latched at BSP_Init before anything can clear it. */
@@ -106,6 +112,23 @@ static const uint32_t kAdcChannels[] = {
 };
 
 #define ADC_CHANNEL_COUNT (sizeof(kAdcChannels) / sizeof(kAdcChannels[0]))
+
+/* The sag monitor's lowest sample so far, kept as the raw pair it came from
+ * rather than as millivolts: the interrupt only has to compare, and the one
+ * conversion to millivolts happens in BSP_Battery_StopSagMonitor. Written by
+ * ADC1_IRQHandler, read only once its interrupt is off. sag_vrefint_raw is 0
+ * until the first pair completes. */
+static volatile uint16_t sag_cell_raw;
+static volatile uint16_t sag_vrefint_raw;
+
+/* The cell half of the pair in progress. */
+static volatile uint16_t sag_pair_cell_raw;
+
+/* Thread context only. */
+static bool     sag_running;
+static uint32_t sag_saved_sampling_time;
+
+static void SagMonitorHalt(void);
 
 /* --- Init ----------------------------------------------------------------- */
 
@@ -261,6 +284,16 @@ static uint32_t RtcElapsedMs(uint32_t from_ms, uint32_t to_ms)
 
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 {
+  /* Never into a sleep with the sag monitor running: the converter and its
+     interrupt would stay armed through it. The cycle stops the monitor at the
+     end of every window; this is what holds even on a path out of a window
+     that forgot. First, because the halt's HAL calls poll HAL_GetTick(), which
+     stops below. */
+  if (sag_running)
+  {
+    SagMonitorHalt();
+  }
+
   if (sleep_time_ms == 0u)
   {
     return 0u;
@@ -631,6 +664,174 @@ uint16_t BSP_Battery_ReadMv(void)
   /* No divider to undo: the cell is the boost's input and sits below VDDA by
      construction, so the pin voltage is the cell voltage. */
   return (uint16_t) __LL_ADC_CALC_DATA_TO_VOLTAGE(vdda_mv, raw, ADC_RESOLUTION_LL);
+}
+
+/* --- Sag monitor -----------------------------------------------------------
+ *
+ * On the scope the cell's minimum during a window is a short dip on each
+ * transmit burst, so a reading taken from thread context would almost always
+ * land between them. Instead the converter runs continuously for the whole
+ * window and its end-of-conversion interrupt keeps the lowest result.
+ *
+ * Every sample is a pair, the cell and then VREFINT, back to back in one scan,
+ * and the pair is what makes it a voltage. MeasureVddaMv's single VDDA reading
+ * would not do here: a cell that can no longer power the module is exactly when
+ * the boost stops holding 3.3 V, and a sagging reference reads a sagging cell
+ * as higher than it is.
+ *
+ * Wait mode (CFGR1.WAIT) holds each conversion until the previous result has
+ * been read. So the interrupt can never fall a result behind, and a pair can
+ * never be torn across two scans.
+ *
+ * Cost: the pair shares VREFINT's 160.5-cycle sampling time (the L0 has one
+ * SMPR), so with 4x oversampling a result takes ~86 us -- a pair every
+ * ~171 us, ~11,700 interrupts a second. Each one also ends a BSP_Idle, so the
+ * window's wait loop polls that often too. Neither is visible next to the
+ * module's tens of milliamps, and none of it outlives the window.
+ *
+ * The vector is defined here for the same reason LPUART1's is (top of this
+ * file): the .ioc does not enable the ADC interrupt, and the NVIC line is
+ * handled by the start and the halt below rather than by generated code.
+ */
+void ADC1_IRQHandler(void)
+{
+  uint32_t isr = hadc.Instance->ISR;
+
+  if ((isr & ADC_ISR_EOC) == 0u)
+  {
+    return;
+  }
+
+  /* Clears EOC, and in wait mode is what lets the next conversion start. */
+  uint16_t raw = (uint16_t) hadc.Instance->DR;
+
+  if ((isr & ADC_ISR_EOS) == 0u)
+  {
+    /* The cell: channel 6 converts before VREFINT (17) in a forward scan. */
+    sag_pair_cell_raw = raw;
+    return;
+  }
+
+  hadc.Instance->ISR = ADC_ISR_EOS;
+
+  /* VREFINT closes the pair. The cell voltage goes as cell / VREFINT, so the
+     lower pair is the one with the smaller ratio -- compared cross-multiplied,
+     because the M0+ has no divider and two 10-bit counts multiply well inside
+     32 bits. A VREFINT of 0 is not a reading and is skipped. */
+  uint32_t cell = sag_pair_cell_raw;
+
+  if ((raw != 0u) &&
+      ((sag_vrefint_raw == 0u) || ((cell * sag_vrefint_raw) < ((uint32_t) sag_cell_raw * raw))))
+  {
+    sag_cell_raw    = (uint16_t) cell;
+    sag_vrefint_raw = raw;
+  }
+}
+
+/* Put back everything BSP_Battery_StartSagMonitor changed, the interrupt
+ * first so it cannot run while the rest comes down. Leaves the converter the
+ * way BSP_Battery_ReadMv leaves it: stopped, disabled, single conversion, the
+ * configured sampling time, VREFINT deselected.
+ */
+static void SagMonitorHalt(void)
+{
+  HAL_NVIC_DisableIRQ(ADC1_IRQn);
+  __HAL_ADC_DISABLE_IT(&hadc, ADC_IT_EOC);
+
+  (void) HAL_ADC_Stop(&hadc);
+
+  /* Both writable only with no conversion running, which the stop ensured. */
+  CLEAR_BIT(hadc.Instance->CFGR1, ADC_CFGR1_CONT | ADC_CFGR1_WAIT);
+  MODIFY_REG(hadc.Instance->SMPR, ADC_SMPR_SMPR, sag_saved_sampling_time);
+
+  /* Clears ADC_CCR_VREFEN with it, as ReadAdcChannel's deselect does. */
+  ADC_ChannelConfTypeDef config = {0};
+
+  config.Channel = ADC_CHANNEL_VREFINT;
+  config.Rank    = ADC_RANK_NONE;
+
+  (void) HAL_ADC_ConfigChannel(&hadc, &config);
+
+  HAL_NVIC_ClearPendingIRQ(ADC1_IRQn);
+
+  sag_running = false;
+}
+
+void BSP_Battery_StartSagMonitor(void)
+{
+  if (sag_running)
+  {
+    return;
+  }
+
+  /* Marked running before anything is changed, so a failure anywhere below is
+     undone by the same halt that ends a run. */
+  sag_running             = true;
+  sag_saved_sampling_time = READ_BIT(hadc.Instance->SMPR, ADC_SMPR_SMPR);
+  sag_cell_raw            = 0u;
+  sag_vrefint_raw         = 0u;
+  sag_pair_cell_raw       = 0u;
+
+  /* Already up from this cycle's BSP_Battery_ReadMv, so this returns at once.
+     It stays up for the whole window: only BSP_McuSleep takes it down. */
+  if (HAL_ADCEx_EnableVREFINT() != HAL_OK)
+  {
+    SagMonitorHalt();
+    return;
+  }
+
+  /* Both channels in the sequence this time, the opposite of ReadAdcChannel. */
+  ADC_ChannelConfTypeDef config = {0};
+
+  config.Rank = ADC_RANK_CHANNEL_NUMBER;
+
+  for (unsigned i = 0u; i < ADC_CHANNEL_COUNT; i++)
+  {
+    config.Channel = kAdcChannels[i];
+
+    if (HAL_ADC_ConfigChannel(&hadc, &config) != HAL_OK)
+    {
+      SagMonitorHalt();
+      return;
+    }
+  }
+
+  MODIFY_REG(hadc.Instance->SMPR, ADC_SMPR_SMPR, VREFINT_SAMPLING_TIME);
+  SET_BIT(hadc.Instance->CFGR1, ADC_CFGR1_CONT | ADC_CFGR1_WAIT);
+
+  __HAL_ADC_ENABLE_IT(&hadc, ADC_IT_EOC);
+  HAL_NVIC_SetPriority(ADC1_IRQn, SAG_MONITOR_IRQ_PRIORITY, 0);
+  HAL_NVIC_ClearPendingIRQ(ADC1_IRQn);
+  HAL_NVIC_EnableIRQ(ADC1_IRQn);
+
+  if (HAL_ADC_Start(&hadc) != HAL_OK)
+  {
+    SagMonitorHalt();
+  }
+}
+
+uint16_t BSP_Battery_StopSagMonitor(void)
+{
+  if (sag_running)
+  {
+    SagMonitorHalt();
+  }
+
+  /* The interrupt is off, so the pair can no longer change under us. */
+  uint32_t cell_raw    = sag_cell_raw;
+  uint32_t vrefint_raw = sag_vrefint_raw;
+
+  /* Taken: a second stop reports nothing rather than this run again. */
+  sag_vrefint_raw = 0u;
+
+  if (vrefint_raw == 0u)
+  {
+    return 0u;
+  }
+
+  uint32_t vdda_mv = __LL_ADC_CALC_VREFANALOG_VOLTAGE(vrefint_raw, ADC_RESOLUTION_LL);
+
+  return (uint16_t) __LL_ADC_CALC_DATA_TO_VOLTAGE(vdda_mv, cell_raw, ADC_RESOLUTION_LL);
 }
 
 /* --- Spare I/O ------------------------------------------------------------ */

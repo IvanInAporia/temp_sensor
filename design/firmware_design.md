@@ -16,7 +16,8 @@ What the device does, how the code is arranged, and which decisions are load-bea
 
 Every five minutes: read the cell, read the sensor, decide whether the temperature
 has moved enough to be worth telling anyone, and if so bring up the Wi-Fi module,
-report four datapoints, and put it away again. Then sleep.
+report four datapoints, plus a fifth with the lowest the cell was pulled to in the
+windows before (§5), and put it away again. Then sleep.
 
 A press of the Wi-Fi button opens the same window for pairing instead, and can
 interrupt the sleep to do it. A device that isn't paired opens no report windows
@@ -74,6 +75,10 @@ startup file, and the NVIC line is enabled once in `BSP_Init()`. If a future
 `.ioc` revision ever does enable that interrupt, both definitions will exist and
 the link will fail with a duplicate symbol — the loud version of the same problem,
 and the right one to have.
+
+The ADC interrupt behind the sag monitor (§5) lives there for the same reason:
+`ADC1_IRQHandler` is defined in `bsp_stm32.c`, and its NVIC line is enabled by the
+monitor's start and disabled by its halt, never left on.
 
 **Do not "tidy" this into the generated files.**
 
@@ -220,6 +225,57 @@ style:
    `Wifi_RailOn`/`Wifi_RailOff` in `main.c` own this ordering.
 3. **Every path out of a Wi-Fi window cuts the supply.** Leaving the module
    powered is the one mistake that empties the cell outright.
+4. **The sag monitor never runs into a sleep.** The window stops it once the
+   supply is off, and `BSP_McuSleep` halts it first anyway (below).
+
+### The sag monitor: the cell's minimum under load
+
+The cell pin is the boost's input, after the holder. During a window the module's
+transmit bursts pull it down. On the office board's Eneloop the scope shows 1.30 V
+dipping to 0.96 V in short peaks. A boost draws roughly constant power, so the
+input collapses once the cell and its path can no longer deliver it, no matter how
+much charge is left. How deep the dips go is the early warning for that.
+
+The dips are too short for a reading from thread context to catch, so the BSP
+samples them from an interrupt
+([`BSP_Battery_StartSagMonitor`](../libs/src/bsp/bsp.h)):
+
+- **The ADC runs continuously** over the cell pin and VREFINT, back to back in one
+  scan. Its end-of-conversion interrupt keeps the pair with the lowest
+  cell/VREFINT ratio.
+  - Each sample carries its own reference because the failing case is exactly when
+    the boost stops holding 3.3 V, and a sagging VDDA reads a sagging cell high.
+- **Wait mode** holds each conversion until the last result has been read. So a
+  late interrupt leaves a gap in the sampling, never a torn pair. That is also why
+  its priority is the lowest there is.
+- **Rate:** about 86 µs per result (VREFINT's 160.5-cycle sampling, 4×
+  oversampling), so a pair every ~171 µs, or ~11,700 interrupts a second, and
+  every one ends a `BSP_Idle`. Invisible next to the module's tens of milliamps.
+  A dip much shorter than ~100 µs is averaged rather than caught.
+- **Coverage:** the window starts the monitor before the supply comes up, so the
+  inrush counts, and stops it after the supply is off. `BSP_McuSleep` halts it
+  before Stop whatever the caller did. The halt disables the NVIC line first, then
+  the ADC interrupt, the conversion, continuous and wait mode, and VREFINT's
+  channel, leaving the ADC as `BSP_Battery_ReadMv` expects it.
+
+The result goes out as **DP 101** (`battery_min_voltage`, mV) on the *next*
+report. That report carries the lowest value across every window since the last
+one that reached the cloud, failed windows included. A window whose sag browned
+the module out is the one most worth knowing about, and the one that could not say
+so itself. Checked against the scope on 2026-11-03: 945 mV reported against a
+961 mV scope minimum, with the cell resting at 1.286 V. A minimum reads slightly low
+by nature, since it also picks up the deepest noise spike. A window's own minimum is
+not reported in that window: the module
+queries every DP twice per window, and a value that changed mid-window would
+put two different entries into the cloud log. The first window after a reset has
+nothing to report and sends no DP 101. Nor does a minimum of 1000 mV or above:
+the boost still has plenty of margin there, and the DP would only be noise in the
+app's history (the threshold is in
+[`tuya_link.c`](../libs/src/tuya_link/tuya_link.c)).
+
+**The DP has to exist on the Tuya platform:** ID 101, Value, report only,
+0..3300, step 1, scale 0, unit mV. See the `PORTED` note in
+[`protocol.h`](../tuya/protocol.h).
 
 ## 6. Flash and RAM
 
@@ -239,13 +295,13 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  12516       8    1608   14132    3734
+  13128       8    1624   14760    39a8
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~592 bytes and the stack has ~1456 available. Flash is 12.5 KB of
-16 KB, leaving ~3.8 KB. (The same tree at `-O2` is 13.6 KB of text — it fits, but
-with half the headroom.)
+static RAM is ~608 bytes and the stack has ~1440 available. Flash is 13.1 KB of
+16 KB, leaving ~3.2 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
+13.6 KB, so expect about 1.1 KB more at `-O2`.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
 is `WIFI_UART_RECV_BUF_LMT` / `WIFI_DATA_PROCESS_LMT` in
@@ -275,8 +331,8 @@ The ring size is load-bearing and **fails silently when too small**.
 `uart_receive_input()` drops a byte without a word when the ring is full — no UART
 error, nothing any counter can see — so the ring has to cover the longest gap
 between `wifi_uart_service()` calls. The longest gap here is `all_data_update()`:
-`uart_transmit_output` blocks a byte at a time, so four DP frames (57 bytes) hold
-the loop for ~60 ms while the module is free to send a heartbeat or a status
+`uart_transmit_output` blocks a byte at a time, so five DP frames (72 bytes) hold
+the loop for ~75 ms while the module is free to send a heartbeat or a status
 change. Those are 7–8 bytes each; 32 gives a 39-byte ring. The process buffer is
 margin rather than a cliff now that an oversize frame is discarded.
 
@@ -294,7 +350,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 83 GoogleTest cases, ~2.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 89 GoogleTest cases, ~2.6 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -313,7 +369,7 @@ that the module is never left powered.
 - **No watchdog.** IWDG on this part maxes out around 26 s against a 5-minute
   sleep, so it would have to be re-armed on every RTC wake and would not cover the
   sleep itself. Worth revisiting if field units are seen to wedge.
-- **No persistent settings.** All four DPs are report-only; nothing comes down
+- **No persistent settings.** All five DPs are report-only; nothing comes down
   from the cloud, so there is nothing to store. The part's 128 bytes of EEPROM are
   untouched.
 - **No I2C bus recovery.** An MCU reset in the middle of a sensor read could in

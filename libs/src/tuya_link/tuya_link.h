@@ -1,7 +1,7 @@
 #pragma once
 
 // Everything the cycle needs from the Tuya T3-3S, in the shape the cycle wants
-// to read: power it up, wait for it, hand it four numbers, put it away.
+// to read: power it up, wait for it, hand it its numbers, put it away.
 //
 // Below this sits the vendor MCU SDK in ../../../tuya/, which is a byte pump
 // with a parser attached -- it has no notion of a report window, a timeout or
@@ -114,11 +114,23 @@ void Tuya_SetDps(int16_t temp_c10,
                  uint8_t battery_pct,
                  Battery_State battery_state);
 
+/* Cache the lowest cell voltage under load, in millivolts, for DP 101. Does
+ * not transmit. 0 means nothing has been measured, and reports nothing; so
+ * does anything at 1000 mV or above, where the sag does not matter yet.
+ *
+ * Apart from the reading set above because it is a measurement of report
+ * windows, not of the room: it has its own "nothing yet", and goes out with or
+ * without a reading. Like Tuya_SetDps, call it only with the module unpowered.
+ */
+void Tuya_SetBatteryMinMv(uint16_t mv);
+
 /* Push the cached readings to the module.
  *
  * Called by the cycle once the cloud is up, and by the SDK itself
  * (all_data_update in ../../../tuya/protocol.c) whenever the module asks for
- * everything. Does nothing until Tuya_SetDps() has supplied a set, so a query
- * arriving before the first measurement reports nothing rather than zeroes.
+ * everything. Sends no readings until Tuya_SetDps() has supplied a set, so a
+ * query arriving before the first measurement reports nothing rather than
+ * zeroes -- and, the same way, no DP 101 while its value is 0 or 1000 mV and
+ * above.
  */
 void Tuya_ReportCachedDps(void);

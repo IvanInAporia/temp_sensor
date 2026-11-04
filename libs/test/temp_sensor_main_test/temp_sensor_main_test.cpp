@@ -320,6 +320,134 @@ TEST_F(TempSensorMainTest, ResetsTheSdkParserOnEveryWindow)
     EXPECT_EQ(WindowsOpened(), tuyaSdkMockProtocolInitCalls());
 }
 
+// --- The cell's minimum under load ----------------------------------------
+//
+// The module's transmit bursts pull the cell down for a millisecond or less
+// at a time, and how far is what says whether the cell -- and its holder --
+// can still power a report. The BSP samples it through every window, and the
+// next window carries the lowest it saw (DP 101).
+
+TEST_F(TempSensorMainTest, TheSagMonitorCoversTheWholeWindow)
+{
+    // Already running when the supply comes up, so the module's inrush
+    // counts, and stopped only once the supply is down again.
+    ModuleReachesCloud();
+    RunCycles(1);
+
+    ASSERT_EQ(1, WindowsOpened());
+    EXPECT_TRUE(bspMockSagMonitorCoveredLastWindow());
+    EXPECT_FALSE(bspMockSagMonitorRunning());
+}
+
+TEST_F(TempSensorMainTest, NoWindowLeavesTheSagMonitorRunningIntoTheSleep)
+{
+    // Its interrupt fires every ~170 us. The BSP stops it before a sleep
+    // whatever happens, but every way out of a window should already have.
+    ModuleNeverAnswers();
+    RunCycles(1); // the report after boot, into a dead module
+    ModuleBootsButNeverConnects();
+    RunCycles(1); // its retry, into a router that is down
+    ModuleReachesCloud();
+    RunCycles(1); // the second retry gets through
+
+    ModuleIsUnpaired();
+    bspMockPressButton();
+    RunCycles(1); // a pairing window nobody finishes
+    bspMockReleaseButton();
+
+    ASSERT_EQ(4, WindowsOpened());
+    EXPECT_EQ(0, bspMockSleepsWithSagMonitorRunning());
+}
+
+TEST_F(TempSensorMainTest, TheFirstWindowAfterBootHasNoMinimumToReport)
+{
+    // A window carries the windows before it -- its own is still being
+    // measured -- and after a reset there are none. Nothing goes out, rather
+    // than a 0 mV that would read as a dead cell.
+    bspMockSetSagMinMv(960u);
+    ModuleReachesCloud();
+    RunCycles(1);
+
+    ASSERT_EQ(1, WindowsOpened());
+
+    uint32_t value = 0;
+    EXPECT_FALSE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+}
+
+TEST_F(TempSensorMainTest, EachReportCarriesThePreviousWindowsMinimum)
+{
+    bspMockSetSagMinMv(960u);
+    SettleAt(234); // one window: the report after boot
+
+    bspMockSetSagMinMv(940u);
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2)); // one cycle of median lag, then the report
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_EQ(960u, value);
+
+    StageReading(320, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_EQ(940u, value);
+}
+
+TEST_F(TempSensorMainTest, AReportCarriesTheLowestOfTheFailedWindowsBeforeIt)
+{
+    // A window whose sag browned the module out never gets to say so. The
+    // first one after it that does get through has to.
+    bspMockSetSagMinMv(1000u);
+    SettleAt(234);
+
+    ModuleBootsButNeverConnects();
+    StageReading(280, 55u);
+    RunCycles(1); // one cycle of median lag
+
+    bspMockSetSagMinMv(850u);
+    ASSERT_EQ(1, WindowsDuring(1)); // fails
+    bspMockSetSagMinMv(900u);
+    ASSERT_EQ(1, WindowsDuring(1)); // its retry fails too
+
+    ModuleReachesCloud();
+    bspMockSetSagMinMv(990u);
+    ASSERT_EQ(1, WindowsDuring(1)); // the second retry gets through
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_EQ(850u, value);
+
+    // Delivered, so forgotten: the next report starts again from the window
+    // that delivered it.
+    StageReading(320, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_EQ(990u, value);
+}
+
+TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
+{
+    // Above that the boost still has plenty of margin, and the DP would only
+    // be noise in the app's history.
+    bspMockSetSagMinMv(1000u);
+    SettleAt(234);
+
+    bspMockSetSagMinMv(999u);
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2)); // carries 1000 mV
+
+    uint32_t value = 0;
+    EXPECT_FALSE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+
+    StageReading(320, 55u);
+    ASSERT_EQ(1, WindowsDuring(2)); // carries 999 mV
+
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_EQ(999u, value);
+}
+
 // --- Cadence --------------------------------------------------------------
 
 TEST_F(TempSensorMainTest, SleepsOutTheRestOfEachPeriod)

@@ -136,6 +136,17 @@ static uint32_t report_hold_until_ms;
  * again, at the cost of the ~4 s the module takes to say so. */
 static bool module_unpaired;
 
+/* The lowest the module's load pulled the cell to, in mV, over the windows
+ * since the last one that reached the cloud -- or 0 if none was measured. The
+ * next window carries it out (DP 101), so a report says how the windows before
+ * it went, failed ones included. A window whose sag browned the module out is
+ * the one most worth knowing about, and the one that could not say so itself.
+ *
+ * In RAM, like the backoff. A battery swap resets it, which is right: it
+ * belongs to the cell it was measured on. */
+static uint16_t battery_min_mv;
+
+static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv);
 static bool PairingRequested(void);
 static bool ReportBackoffOver(void);
 static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10);
@@ -156,6 +167,7 @@ void TempSensorInit(void)
     report_retries_left  = REPORT_RETRIES;
     report_hold_until_ms = next_cycle_ms;
     module_unpaired      = false;
+    battery_min_mv       = 0u;
 }
 
 void TempSensorRun(void)
@@ -299,6 +311,13 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
 {
     bool reached_cloud = false;
 
+    /* The windows before this one: its own minimum is still to be measured.
+     * Cached now, with the module still unpowered, like the readings. */
+    Tuya_SetBatteryMinMv(battery_min_mv);
+
+    /* Before the supply, so the module's inrush counts too. */
+    BSP_Battery_StartSagMonitor();
+
     Tuya_PowerOn();
 
     if (Tuya_WaitUntil(Tuya_IsAlive, WIFI_ALIVE_TIMEOUT_MS))
@@ -354,7 +373,34 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
 
     Tuya_PowerOff();
 
+    /* After the supply, so the monitor covered all of it. Never left running:
+     * its interrupt fires every ~170 us. */
+    uint16_t window_min_mv = BSP_Battery_StopSagMonitor();
+
+    if (reached_cloud)
+    {
+        /* What was cached has gone out, so the next report starts from this
+         * window alone. */
+        battery_min_mv = window_min_mv;
+    }
+    else
+    {
+        battery_min_mv = LowerMv(battery_min_mv, window_min_mv);
+    }
+
     return reached_cloud;
+}
+
+/* The lower of two readings in mV, where 0 is "no reading" rather than 0 V.
+ */
+static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv)
+{
+    if ((a_mv == 0u) || ((b_mv != 0u) && (b_mv < a_mv)))
+    {
+        return b_mv;
+    }
+
+    return a_mv;
 }
 
 static bool PairingRequested(void)

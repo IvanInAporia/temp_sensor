@@ -20,6 +20,15 @@ static struct {
     bool          valid;
 } dps;
 
+/* DP 101, or 0 for nothing to report. Its own variable rather than part of the
+ * set above, because it has its own source and its own "nothing yet" -- see
+ * Tuya_SetBatteryMinMv. Written between windows only, like the set. */
+static uint16_t battery_min_mv;
+
+/* DP 101 goes out only below this. Above it the boost still has plenty of
+ * margin, and the DP would only add noise to the app's history. */
+#define BATTERY_MIN_REPORT_BELOW_MV 1000u
+
 static void OnByteReceived(void)
 {
     /* Re-arm before parsing, not after.
@@ -53,7 +62,8 @@ static void OnRxError(void)
 
 void Tuya_Init(void)
 {
-    dps.valid = false;
+    dps.valid      = false;
+    battery_min_mv = 0u;
 
     BSP_Wifi_SetRxErrorCallback(OnRxError);
 
@@ -177,8 +187,20 @@ void Tuya_SetDps(int16_t temp_c10,
     dps.valid         = true;
 }
 
+void Tuya_SetBatteryMinMv(uint16_t mv)
+{
+    /* Same rule as Tuya_SetDps: only between windows. */
+    battery_min_mv = mv;
+}
+
 void Tuya_ReportCachedDps(void)
 {
+    /* First, because it does not depend on the reading set below. */
+    if ((battery_min_mv != 0u) && (battery_min_mv < BATTERY_MIN_REPORT_BELOW_MV))
+    {
+        (void) mcu_dp_value_update(DPID_BATTERY_MIN_VOLTAGE, (u32) battery_min_mv);
+    }
+
     if (!dps.valid)
     {
         /* The module can query before this device has measured anything --

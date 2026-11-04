@@ -96,7 +96,7 @@ If this function needs to be enabled, the UART receive buffer will become larger
    UART error, nothing any counter can see -- so the ring has to cover the
    longest gap between wifi_uart_service() calls.  The longest gap in this
    firmware is all_data_update(): uart_transmit_output blocks a byte at a time,
-   so four DP frames (57 bytes) hold the loop for ~60 ms while the module is
+   so five DP frames (72 bytes) hold the loop for ~75 ms while the module is
    free to send a heartbeat or a status change.  Those are 7-8 bytes each; 39
    bytes is ~40 ms of continuous wire time at 9600 8N1, which the module never
    sends.  Tuya's 16 gives 23 bytes.
@@ -376,6 +376,13 @@ May need to appropriately increase send and receive buffer sizes.
 #define DPID_BATTERY_STATE 3
 //Battery level(Only report)
 #define DPID_BATTERY_PERCENTAGE 4
+/* PORTED: added by hand, ahead of a re-download of the SDK.  The product on
+   the Tuya platform needs the matching custom DP for the cloud to keep it:
+   ID 101, identifier battery_min_voltage, Value, report only, 0..3300, step 1,
+   scale 0, unit mV.  The lowest the cell was pulled to during the report
+   windows before this one (tuya_link.c). */
+//Lowest battery voltage under load(Only report)
+#define DPID_BATTERY_MIN_VOLTAGE 101
 
 #endif
 

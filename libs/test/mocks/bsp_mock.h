@@ -75,6 +75,24 @@ void bspMockSetBatteryMv(uint16_t mv);
 uint32_t bspMockBatteryLastReadMs(void);
 int      bspMockBatteryReadCalls(void);
 
+/* What BSP_Battery_StopSagMonitor returns for a monitor that was running: the
+ * lowest the cell went during the window. 0 is the device's "saw nothing".
+ */
+void bspMockSetSagMinMv(uint16_t mv);
+
+bool bspMockSagMonitorRunning(void);
+
+/* Whether the monitor ran for the whole of the last window: already running
+ * when the supply came up, still running when it went down.
+ */
+bool bspMockSagMonitorCoveredLastWindow(void);
+
+/* BSP_McuSleep calls entered with the monitor still running. The real BSP
+ * stops it there, and so does this one, but the cycle is meant to have stopped
+ * it already: anything above zero is a path out of a window that forgot.
+ */
+int bspMockSleepsWithSagMonitorRunning(void);
+
 /* --- Button --------------------------------------------------------------- */
 
 /* Press: latches the edge BSP_Wifi_TakeButtonEvent reports AND holds the level

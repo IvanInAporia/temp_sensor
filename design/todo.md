@@ -311,3 +311,24 @@ and no gap longer than about 4 h.
 Test it with the Tuya MCU simulator or a logic capture. If the module ignores the command,
 every window falls back to committing on cloud-connected, so item 5's code adds nothing and
 is worth taking back out.
+
+### Sag monitor: DP 101 against the scope
+
+- [x] Done 2026-11-03. With the office Eneloop resting at 1.286 V (DMM), DP 101 read 945 mV and
+  the scope's minimum was 961 mV: 16 mV low, so it catches the dips. The gap is within the
+  minimum's noise bias plus the scope's DC accuracy. Caveat: DP 101 belongs to the window
+  before the one that sends it, so make sure the scope captured that window.
+
+The sag monitor (firmware_design.md section 5) reports the lowest cell voltage under load
+as DP 101, one report late. First add the DP on the Tuya platform: ID 101, Value, report
+only, 0..3300, step 1, scale 0, unit mV. Without it the cloud drops the value.
+
+Then scope the board input through one window and compare its minimum with the DP 101
+the next report carries. The scope showed 0.96 V on the office Eneloop at 1.30 V.
+- **Within a few tens of mV:** the monitor catches the dips, and its numbers can be used
+  for a loaded-voltage battery gauge.
+- **Well above the scope:** the dips are shorter than the ~86 µs a result takes. Drop
+  the oversampling for the monitor, or move to DMA.
+- **Well below the scope:** suspect noise. A minimum over tens of thousands of samples also
+  finds the deepest noise spike and the boost's input ripple. Compare with the scope's
+  bandwidth limit off.

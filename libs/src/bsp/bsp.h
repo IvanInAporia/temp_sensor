@@ -204,6 +204,29 @@ bool BSP_Wifi_ButtonIsPressed(void);
  */
 uint16_t BSP_Battery_ReadMv(void);
 
+/* Start tracking the lowest cell voltage, for the length of a report window.
+ *
+ * The other half of BSP_Battery_ReadMv: this one is meant to measure the sag.
+ * The module's transmit bursts pull the cell down for a millisecond or less at
+ * a time, far too briefly for a reading taken from the cycle to land on one,
+ * and how far down they pull it is what says whether the cell -- and the
+ * holder it sits in -- can still power a report.
+ *
+ * So the implementation samples on its own, continuously, from an interrupt,
+ * until BSP_Battery_StopSagMonitor. It runs through BSP_Idle, which is the
+ * point of it. It never runs through BSP_McuSleep: that stops it first, so a
+ * monitor left running cannot keep the converter and its interrupt alive into
+ * the sleep.
+ *
+ * BSP_Battery_ReadMv is not available while it runs.
+ */
+void BSP_Battery_StartSagMonitor(void);
+
+/* Stop the monitor and return the lowest cell voltage it saw, in millivolts,
+ * or 0 if it saw none. Safe to call on a monitor that is not running.
+ */
+uint16_t BSP_Battery_StopSagMonitor(void);
+
 /* --- Spare I/O --------------------------------------------------------------
  *
  * PA5 on this board, brought out to a test point and otherwise unused. Kept in

@@ -29,6 +29,11 @@ static uint16_t battery_mv;
 static uint32_t battery_last_read_ms;
 static int      battery_read_calls;
 
+static uint16_t sag_min_mv;
+static bool     sag_running;
+static bool     sag_covered_window;
+static int      sleeps_with_sag_running;
+
 static bool button_event;
 static bool button_down;
 
@@ -74,6 +79,11 @@ void bspMockReset(void)
     battery_mv           = 0u;
     battery_last_read_ms = 0u;
     battery_read_calls   = 0;
+
+    sag_min_mv              = 0u;
+    sag_running             = false;
+    sag_covered_window      = false;
+    sleeps_with_sag_running = 0;
 
     button_event = false;
     button_down  = false;
@@ -139,6 +149,13 @@ uint32_t bspMockNowMs(void)
 
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 {
+    /* Counted, then stopped as the real one stops it. */
+    if (sag_running)
+    {
+        sleeps_with_sag_running++;
+        sag_running = false;
+    }
+
     sleep_calls++;
     last_sleep_request_ms = sleep_time_ms;
     total_sleep_requested_ms += sleep_time_ms;
@@ -299,6 +316,40 @@ int bspMockBatteryReadCalls(void)
     return battery_read_calls;
 }
 
+void BSP_Battery_StartSagMonitor(void)
+{
+    sag_running = true;
+}
+
+uint16_t BSP_Battery_StopSagMonitor(void)
+{
+    bool was_running = sag_running;
+
+    sag_running = false;
+
+    return was_running ? sag_min_mv : 0u;
+}
+
+void bspMockSetSagMinMv(uint16_t mv)
+{
+    sag_min_mv = mv;
+}
+
+bool bspMockSagMonitorRunning(void)
+{
+    return sag_running;
+}
+
+bool bspMockSagMonitorCoveredLastWindow(void)
+{
+    return sag_covered_window;
+}
+
+int bspMockSleepsWithSagMonitorRunning(void)
+{
+    return sleeps_with_sag_running;
+}
+
 /* --- Button --------------------------------------------------------------- */
 
 bool BSP_Wifi_TakeButtonEvent(void)
@@ -341,6 +392,7 @@ void BSP_Wifi_PowerOn(void)
     wifi_powered = true;
     wifi_power_on_calls++;
     wifi_last_power_on_ms = now_ms;
+    sag_covered_window    = sag_running;
 }
 
 void BSP_Wifi_PowerOff(void)
@@ -348,6 +400,7 @@ void BSP_Wifi_PowerOff(void)
     if (wifi_powered)
     {
         wifi_last_window_ms = now_ms - wifi_last_power_on_ms;
+        sag_covered_window  = sag_covered_window && sag_running;
     }
 
     wifi_powered = false;
