@@ -5,7 +5,10 @@
 
 #include <string.h>
 
-#define DP_CAPACITY 32
+/* Past this, reports are counted but not kept, and tuyaSdkMockLastDpValue sees
+ * only the first ones: a test of many windows would read stale values. Six DPs
+ * a window, so this covers twenty windows. */
+#define DP_CAPACITY 128
 #define RX_CAPACITY 256
 
 static uint8_t wifi_state;
@@ -162,6 +165,14 @@ u8 mcu_dp_value_update(u8 dpid, u32 value)
 u8 mcu_dp_enum_update(u8 dpid, u8 value)
 {
     RecordDp((uint8_t) dpid, true, (uint32_t) value);
+
+    return SUCCESS;
+}
+
+u8 mcu_dp_bool_update(u8 dpid, u8 value)
+{
+    /* The real one sends any non-zero value as 1. */
+    RecordDp((uint8_t) dpid, false, (value != 0u) ? 1u : 0u);
 
     return SUCCESS;
 }

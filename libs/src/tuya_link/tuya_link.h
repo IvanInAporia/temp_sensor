@@ -108,11 +108,14 @@ void Tuya_StartPairing(void);
  * reconnects on every window. The SDK calls all_data_update() for that, from
  * inside Tuya_Service(), at a moment no caller controls. There has to be an
  * answer ready.
+ *
+ * battery_damaged is DP 102: the cell sags far more than a healthy one.
  */
 void Tuya_SetDps(int16_t temp_c10,
                  uint8_t rh_pct,
                  uint8_t battery_pct,
-                 Battery_State battery_state);
+                 Battery_State battery_state,
+                 bool battery_damaged);
 
 /* Cache the lowest cell voltage under load, in millivolts, for DP 101. Does
  * not transmit. 0 means nothing has been measured, and reports nothing; so

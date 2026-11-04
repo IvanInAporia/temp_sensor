@@ -332,3 +332,25 @@ the next report carries. The scope showed 0.96 V on the office Eneloop at 1.30 V
 - **Well below the scope:** suspect noise. A minimum over tens of thousands of samples also
   finds the deepest noise spike and the boost's input ripple. Compare with the scope's
   bandwidth limit off.
+
+### Gauge under load and DP 102 (battery_damaged)
+
+- [ ] Done
+
+The battery percentage now moves its 0 % point up to just above the cell's collapse
+voltage, and DP 102 flags a cell that sags far more than a healthy one (firmware_design.md
+section 5). First add the DP on the Tuya platform: ID 102, identifier battery_damaged, Bool,
+report only.
+
+Then check, one report late each time:
+- **Healthy office Eneloop:** about 63 % at 1.286 V, DP 102 false.
+- **The failed Eneloop on the office board:** 0 % and Low from the second report after it
+  goes in, DP 102 true.
+- **The failed Eneloop recharged:** DP 102 should still be true if its resistance stays
+  high, even though its DP 101 looks like a healthy cell's. If it reads false, its
+  resistance was high only because it was nearly flat.
+- **A freshly charged healthy cell:** 100 %, which the old curve never showed.
+- **Variation between windows:** a few days of DP 101 on one cell. The trend's 60 mV step
+  limit assumes about ±20 mV; set it to about three times what DP 101 shows.
+- **Front board:** the Duracell in its holder. If a healthy cell trips DP 102 there, the
+  holder accounts for the sag, and DP 102 is flagging the holder rather than the cell.

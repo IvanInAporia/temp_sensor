@@ -16,8 +16,9 @@ What the device does, how the code is arranged, and which decisions are load-bea
 
 Every five minutes: read the cell, read the sensor, decide whether the temperature
 has moved enough to be worth telling anyone, and if so bring up the Wi-Fi module,
-report four datapoints, plus a fifth with the lowest the cell was pulled to in the
-windows before (§5), and put it away again. Then sleep.
+report temperature, humidity and three battery datapoints (percentage, level, and
+whether the cell looks damaged), plus one with the lowest the cell was pulled to
+in the windows before (§5), and put it away again. Then sleep.
 
 A press of the Wi-Fi button opens the same window for pairing instead, and can
 interrupt the sleep to do it. A device that isn't paired opens no report windows
@@ -34,7 +35,7 @@ actually reached the cloud.
 ```
 libs/src/bsp/bsp.h          the portability boundary — one implementation per board
 libs/src/sensor/            HDC3020 driver (trigger-on-demand, CRC-checked)
-libs/src/battery/           NiMH cell voltage -> percent, and the 3-level DP enum
+libs/src/battery/           NiMH cell voltage and sag -> percent, level, damaged
 libs/src/report/            the spike filter and the "is this worth the radio" rule
 libs/src/tuya_link/         the glue between the cycle and the vendor MCU SDK
 temp_sensor_main/           the cycle itself
@@ -42,7 +43,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (83 tests) over the same C
+libs/test/                  host GoogleTest suite (119 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -277,6 +278,63 @@ app's history (the threshold is in
 0..3300, step 1, scale 0, unit mV. See the `PORTED` note in
 [`protocol.h`](../tuya/protocol.h).
 
+### The gauge under load
+
+A cell can have plenty of charge and still be unable to power a report, so the
+sag feeds the battery percentage and a damaged flag
+([`battery.h`](../libs/src/battery/battery.h)).
+
+**Collapse voltage.** The boost draws roughly constant power, so at the bottom of
+a burst `P·R = (Vrest − Vmin)·Vmin`, with no current measurement needed. The path
+delivers the most at Vmin = Vrest/2, and the cell stops powering reports at a
+resting voltage of `Vc = 2·√(P·R)`. Two cells measured on the office board are the
+reference points:
+
+| Cell | Vrest | Vmin | Vc |
+|---|---|---|---|
+| Healthy Eneloop | 1.286 V | 0.945 V | ~1.135 V |
+| Failed Eneloop | 1.29 V | 0.58 V | past the limit: below Vrest/2 |
+
+The failed cell's limit matches the 1.28 V it stopped working at on the front board.
+Three details in the code:
+
+- **A sag to half the resting voltage or below reads as collapsing at the resting
+  voltage.** P·R turns back down below that point, so at face value a deeper sag
+  would read as a healthier cell.
+- **No square root.** `Vc ≈ 600 + P·R/600` mV is the tangent at 1.2 V. It only ever
+  reads high, by at most 4 mV between 1.10 and 1.30 V and 9 mV at 1.05 and 1.35 V.
+- **A resting reading above 2 V gives no sample.** No AA rests that high, so it is a
+  bad reference read. Taken as a cell's first window, it would read 0 % and damaged
+  for weeks.
+
+**Trend.** Each window gives one Vc sample, set against that cycle's resting voltage.
+Failed windows count too. The first sample on a cell sets the trend outright; after
+that each one is weighed at 1/4, and its pull is capped at ±60 mV first. So no single
+window moves the trend more than 15 mV: one window as deep as the failed cell's
+takes the healthy cell from 63 % to 61 %, not to 0 %. A sustained change gets there
+in about 7 windows. The price of taking the first window whole: if that one is an
+outlier as deep as the failed cell's, a healthy cell reads 0 % for four windows and
+damaged for six. The trend lives in RAM and is cleared on reset. A swap the MCU
+rides through on the 3.3 V rail's ~100 µF is caught by the resting voltage rising
+50 mV or more since the last cycle, which a cell in use never does. That also clears
+DP 101's carried minimum.
+
+**Percentage.** The 0 % point moves up from 1.10 V to Vc + 50 mV, and the curve above
+it is stretched back over 0–100. So a full cell still reads 100, and 0 % arrives
+while reports still get out. Today's healthy office cell reads 63 % rather than the
+plain curve's 67 %. The failed cell reads 0 %, Low.
+
+**DP 102 `battery_damaged`** is true from a trend of 1210 mV up, midway between the
+two cells. Vc never exceeds the resting voltage, so only a cell still resting at
+1.21 V or more can trip it: an ordinary cell running flat reads empty, not damaged.
+It is sent false as well, so a good cell clears it in the app. Recharging doesn't
+hide a bad cell. If the failed cell kept its resistance at 1.39 V, it would sag to
+only ~0.97 V, about what the healthy cell does today, yet still collapse at ~1.28 V.
+The minimum alone can't tell the two apart.
+
+**The DP has to exist on the Tuya platform:** ID 102, identifier `battery_damaged`,
+Bool, report only.
+
 ## 6. Flash and RAM
 
 16 KB is the binding constraint and it is not comfortable. The bare CubeMX
@@ -295,12 +353,12 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  13128       8    1624   14760    39a8
+  13504       8    1624   15136    3b20
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~608 bytes and the stack has ~1440 available. Flash is 13.1 KB of
-16 KB, leaving ~3.2 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
+static RAM is ~608 bytes and the stack has ~1440 available. Flash is 13.5 KB of
+16 KB, leaving ~2.8 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
 13.6 KB, so expect about 1.1 KB more at `-O2`.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
@@ -331,8 +389,8 @@ The ring size is load-bearing and **fails silently when too small**.
 `uart_receive_input()` drops a byte without a word when the ring is full — no UART
 error, nothing any counter can see — so the ring has to cover the longest gap
 between `wifi_uart_service()` calls. The longest gap here is `all_data_update()`:
-`uart_transmit_output` blocks a byte at a time, so five DP frames (72 bytes) hold
-the loop for ~75 ms while the module is free to send a heartbeat or a status
+`uart_transmit_output` blocks a byte at a time, so six DP frames (84 bytes) hold
+the loop for ~88 ms while the module is free to send a heartbeat or a status
 change. Those are 7–8 bytes each; 32 gives a 39-byte ring. The process buffer is
 margin rather than a cliff now that an oversize frame is discarded.
 
@@ -350,7 +408,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 89 GoogleTest cases, ~2.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 119 GoogleTest cases, ~2.6 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -369,7 +427,7 @@ that the module is never left powered.
 - **No watchdog.** IWDG on this part maxes out around 26 s against a 5-minute
   sleep, so it would have to be re-armed on every RTC wake and would not cover the
   sleep itself. Worth revisiting if field units are seen to wedge.
-- **No persistent settings.** All five DPs are report-only; nothing comes down
+- **No persistent settings.** All six DPs are report-only; nothing comes down
   from the cloud, so there is nothing to store. The part's 128 bytes of EEPROM are
   untouched.
 - **No I2C bus recovery.** An MCU reset in the middle of a sensor read could in
@@ -383,9 +441,13 @@ that the module is never left powered.
 ## 10. The numbers that are still estimates
 
 **The NiMH discharge curve in [`battery.c`](../libs/src/battery/battery.c) is a
-datasheet-shaped estimate, not bench data.** It puts the curve in the right place
-and gives the gauge a shape to interpolate along; a discharge run on the real board
-should replace it. The table is written as anchors precisely so that is an edit and
+datasheet-shaped estimate, not bench data,** except for the full anchor. That one
+moved from 1.40 V to 1.32 V on field data: three cells all read 1.32 V on a DMM a
+few days off the charger, and at 1.40 V no cell ever read 100 %. The plateau
+probably reads low too. The office Eneloop read 71 % at 1.28 V after 24 days, when
+the battery budget says it had used only ~8 %. The curve puts things in the right
+place and gives the gauge a shape to interpolate along; a discharge run on the
+real board should replace it. The table is written as anchors precisely so that is an edit and
 not a rewrite, and `battery_test` pins the properties that must hold whatever the
 numbers are (monotonic, clamped at both ends, most of the scale on the plateau).
 

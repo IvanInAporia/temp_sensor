@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <initializer_list>
+
 extern "C" {
 #include "battery.h"
 #include "bsp_mock.h"
@@ -38,6 +40,32 @@ constexpr int      kCyclesPerDay   = static_cast<int>(24u * 60u * 60u * 1000u / 
 // they are small so a test runs in microseconds.
 constexpr int kBootCalls  = 5;
 constexpr int kCloudCalls = 20;
+
+constexpr Battery_State kLow  = Battery_State_Low;
+constexpr Battery_State kHigh = Battery_State_High;
+
+// DP 101 left out of a report.
+constexpr int kNotSent = -1;
+
+// What one report window said about the cell. -1 for a DP it left out.
+struct BatteryReport {
+    int percent = -1; // DP 4
+    int level   = -1; // DP 3
+    int damaged = -1; // DP 102, 0 or 1
+    int min_mv  = -1; // DP 101
+};
+
+// One row of a table of a cell's reports, in order. The cell rests at rest_mv
+// when the cycle reads it, and the report's window pulls it to min_mv. The
+// DPs come from the windows before: a window's own sag shows in the row below.
+struct ReportRow {
+    uint16_t      rest_mv;
+    uint16_t      min_mv;
+    int           percent;  // DP 4
+    Battery_State level;    // DP 3
+    bool          damaged;  // DP 102
+    int           dp101_mv; // the lowest of the windows before, or kNotSent
+};
 
 class TempSensorMainTest : public ::testing::Test {
 protected:
@@ -120,6 +148,96 @@ protected:
         EXPECT_EQ(3, WindowsDuring(3));
         return bspMockWifiLastPowerOnMs();
     }
+
+    // One more report window: the temperature steps to the other of two
+    // values, and the report goes out after one cycle of median lag.
+    void ReportAgain()
+    {
+        warm_ = !warm_;
+        StageReading(warm_ ? 280 : 234, 55u);
+        EXPECT_EQ(1, WindowsDuring(2));
+    }
+
+    // How many times `dpid` has been reported so far.
+    int DpReports(uint8_t dpid) const
+    {
+        int           count = 0;
+        TuyaSdkMockDp dp;
+
+        for (int i = 0; tuyaSdkMockDpAt(i, &dp); i++)
+        {
+            if (dp.dpid == dpid)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // The battery DPs reported from the `first` captured DP on.
+    BatteryReport BatteryReportSince(int first) const
+    {
+        BatteryReport report;
+        TuyaSdkMockDp dp;
+
+        for (int i = first; tuyaSdkMockDpAt(i, &dp); i++)
+        {
+            int value = static_cast<int>(dp.value);
+
+            switch (dp.dpid)
+            {
+            case DPID_BATTERY_PERCENTAGE:  report.percent = value; break;
+            case DPID_BATTERY_STATE:       report.level   = value; break;
+            case DPID_BATTERY_DAMAGED:     report.damaged = value; break;
+            case DPID_BATTERY_MIN_VOLTAGE: report.min_mv  = value; break;
+            default: break;
+            }
+        }
+
+        return report;
+    }
+
+    // The cell rests at `rest_mv`, and the next report's window pulls it to
+    // `min_mv`. Runs until that report has gone out -- the one after boot,
+    // the first time -- and returns what it said.
+    BatteryReport Report(uint16_t rest_mv, uint16_t min_mv)
+    {
+        bspMockSetBatteryMv(rest_mv);
+        bspMockSetSagMinMv(min_mv);
+
+        int first = tuyaSdkMockDpCount();
+
+        if (WindowsOpened() == 0)
+        {
+            SettleAt(234);
+        }
+        else
+        {
+            ReportAgain();
+        }
+
+        return BatteryReportSince(first);
+    }
+
+    void ExpectReports(std::initializer_list<ReportRow> rows)
+    {
+        int n = 0;
+
+        for (const ReportRow& row : rows)
+        {
+            n++;
+
+            BatteryReport report = Report(row.rest_mv, row.min_mv);
+
+            EXPECT_EQ(row.percent, report.percent) << "report " << n << ": DP 4";
+            EXPECT_EQ(static_cast<int>(row.level), report.level) << "report " << n << ": DP 3";
+            EXPECT_EQ(row.damaged ? 1 : 0, report.damaged) << "report " << n << ": DP 102";
+            EXPECT_EQ(row.dp101_mv, report.min_mv) << "report " << n << ": DP 101";
+        }
+    }
+
+    bool warm_ = false;
 };
 
 // --- The quiet case: no radio ---------------------------------------------
@@ -176,7 +294,7 @@ TEST_F(TempSensorMainTest, ReportsTheFirstReadingAfterBoot)
     EXPECT_NEAR(234, static_cast<int32_t>(value), 1);
 }
 
-TEST_F(TempSensorMainTest, SendsAllFourDatapointsTogether)
+TEST_F(TempSensorMainTest, SendsEveryReadingTogether)
 {
     // Humidity and battery cannot trigger a report of their own, so the only
     // way they ever reach the cloud is by riding along on a temperature one.
@@ -185,16 +303,20 @@ TEST_F(TempSensorMainTest, SendsAllFourDatapointsTogether)
     StageReading(234, 55u);
     RunCycles(1);
 
-    uint32_t temp = 0, humidity = 0, state = 0, percent = 0;
+    uint32_t temp = 0, humidity = 0, state = 0, percent = 0, damaged = 1;
 
     EXPECT_TRUE(tuyaSdkMockLastDpValue(DPID_TEMP_CURRENT, &temp));
     EXPECT_TRUE(tuyaSdkMockLastDpValue(DPID_HUMIDITY_VALUE, &humidity));
     EXPECT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_STATE, &state));
     EXPECT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_PERCENTAGE, &percent));
+    EXPECT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_DAMAGED, &damaged));
 
+    // The first report after boot: no window has measured the sag yet, so the
+    // plain curve, and not damaged.
     EXPECT_EQ(55u, humidity);
-    EXPECT_EQ(static_cast<uint32_t>(Battery_PercentFromMv(1300u)), percent);
-    EXPECT_EQ(static_cast<uint32_t>(Battery_StateFromPercent(Battery_PercentFromMv(1300u))), state);
+    EXPECT_EQ(80u, percent); // the plain curve at 1300 mV
+    EXPECT_EQ(static_cast<uint32_t>(kHigh), state);
+    EXPECT_EQ(0u, damaged);
 }
 
 TEST_F(TempSensorMainTest, SendsSubZeroTemperatureAsASignedValue)
@@ -446,6 +568,118 @@ TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
 
     ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
     EXPECT_EQ(999u, value);
+}
+
+// --- The battery gauge under load -------------------------------------------
+//
+// How far the windows pull the cell down moves the gauge's 0 % point and says
+// whether the cell is damaged (DP 102). Each table is one cell's reports in
+// order. Like DP 101, one report late: a window's own sag is still being
+// measured while it reports, so it shows in the row below. battery_test.cpp
+// has the arithmetic behind each number.
+
+TEST_F(TempSensorMainTest, TheFailedCellReadsEmptyAndDamagedFromItsSecondReport)
+{
+    // The failed Eneloop: 1.29 V at rest, pulled to 0.58 V.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1290,   580,   70,   kHigh,  false,  kNotSent }, // after boot: nothing measured yet
+        { 1290,   580,    0,   kLow,   true,   580      },
+        { 1290,   580,    0,   kLow,   true,   580      },
+    });
+}
+
+TEST_F(TempSensorMainTest, OneDeepWindowBarelyMovesTheGauge)
+{
+    // The healthy Eneloop, and one window as deep as the failed cell's.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1286,   945,   67,   kHigh,  false,  kNotSent }, // after boot: the plain curve
+        { 1286,   945,   63,   kHigh,  false,  945      },
+        { 1286,   580,   63,   kHigh,  false,  945      }, // the deep window
+        { 1286,   945,   61,   kHigh,  false,  580      },
+        { 1286,   945,   61,   kHigh,  false,  945      },
+        { 1286,   945,   62,   kHigh,  false,  945      },
+    });
+}
+
+TEST_F(TempSensorMainTest, ACellSwappedWithoutAResetStartsOver)
+{
+    // The 3.3 V rail's capacitors can carry the sleeping MCU through a quick
+    // swap, so nothing in RAM is cleared. The jump in resting voltage is what
+    // says the cell changed, and the old cell's sag and DP 101 minimum go with
+    // it.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1290,   580,   70,   kHigh,  false,  kNotSent }, // the failed Eneloop
+        { 1290,   580,    0,   kLow,   true,   580      },
+        { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // a cell off the charger
+        { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // its 1.10 V is above DP 101's 1 V
+    });
+}
+
+TEST_F(TempSensorMainTest, ARisingCellIsNotTakenForANewOne)
+{
+    // A cell recovering a little -- 40 mV here -- keeps its trend.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1290,   580,   70,   kHigh,  false,  kNotSent },
+        { 1290,   580,    0,   kLow,   true,   580      },
+        { 1330,   580,    0,   kLow,   true,   580      },
+    });
+}
+
+TEST_F(TempSensorMainTest, AWindowThatNeverReachedTheCloudStillCounts)
+{
+    // A window that fails never reports -- here the router is down; on the
+    // front board the cell browned the module out. Its sag still counts, so
+    // the retry that does get through already reads empty and damaged.
+    bspMockSetBatteryMv(1290u);
+    bspMockSetSagMinMv(580u);
+    ModuleBootsButNeverConnects();
+    ASSERT_EQ(1, WindowsDuring(1)); // the report after boot, lost
+
+    ModuleReachesCloud();
+    int first = tuyaSdkMockDpCount();
+    ASSERT_EQ(1, WindowsDuring(1)); // its retry, five minutes later
+
+    BatteryReport report = BatteryReportSince(first);
+
+    EXPECT_EQ(0, report.percent);
+    EXPECT_EQ(static_cast<int>(kLow), report.level);
+    EXPECT_EQ(1, report.damaged);
+    EXPECT_EQ(580, report.min_mv);
+}
+
+TEST_F(TempSensorMainTest, AFailedRestingReadReadsFlatButKeepsTheTrend)
+{
+    // BSP_Battery_ReadMv returns 0 when it could not read its reference. That
+    // report reads 0 % -- the direction that cannot mislead -- but it is not
+    // taken for a new cell, and its window adds nothing to the trend.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1286,   945,   67,   kHigh,  false,  kNotSent },
+        { 1286,   945,   63,   kHigh,  false,  945      },
+        {    0,   945,    0,   kLow,   false,  945      }, // the read fails
+        { 1286,   945,   63,   kHigh,  false,  945      }, // 63, not 67: the trend held
+        { 1286,   945,   63,   kHigh,  false,  945      },
+    });
+}
+
+TEST_F(TempSensorMainTest, ABadReferenceReadDoesNotMarkTheCellDamaged)
+{
+    // A resting reading far above any cell, from a bad reference read. It is
+    // taken for a new cell -- a false alarm that costs only the trend -- but
+    // not as the first window of one: that would read 0 % and damaged for
+    // weeks.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1286,   945,   67,   kHigh,  false,  kNotSent },
+        { 1286,   945,   63,   kHigh,  false,  945      },
+        { 4000,   945,  100,   kHigh,  false,  kNotSent }, // the bad read
+        { 1286,   945,   67,   kHigh,  false,  945      }, // starting over: the plain curve
+        { 1286,   945,   63,   kHigh,  false,  945      },
+    });
 }
 
 // --- Cadence --------------------------------------------------------------

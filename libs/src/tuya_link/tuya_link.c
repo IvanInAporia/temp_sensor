@@ -17,6 +17,7 @@ static struct {
     uint8_t       rh_pct;
     uint8_t       battery_pct;
     Battery_State battery_state;
+    bool          battery_damaged;
     bool          valid;
 } dps;
 
@@ -175,7 +176,8 @@ void Tuya_StartPairing(void)
 void Tuya_SetDps(int16_t temp_c10,
                  uint8_t rh_pct,
                  uint8_t battery_pct,
-                 Battery_State battery_state)
+                 Battery_State battery_state,
+                 bool battery_damaged)
 {
     /* Written from the cycle only, and only with the module unpowered, so the
      * SDK cannot be halfway through reading the set while it changes: nothing
@@ -183,8 +185,9 @@ void Tuya_SetDps(int16_t temp_c10,
     dps.temp_c10      = temp_c10;
     dps.rh_pct        = rh_pct;
     dps.battery_pct   = battery_pct;
-    dps.battery_state = battery_state;
-    dps.valid         = true;
+    dps.battery_state   = battery_state;
+    dps.battery_damaged = battery_damaged;
+    dps.valid           = true;
 }
 
 void Tuya_SetBatteryMinMv(uint16_t mv)
@@ -221,4 +224,8 @@ void Tuya_ReportCachedDps(void)
     (void) mcu_dp_value_update(DPID_HUMIDITY_VALUE, (u32) dps.rh_pct);
     (void) mcu_dp_enum_update(DPID_BATTERY_STATE, (u8) dps.battery_state);
     (void) mcu_dp_value_update(DPID_BATTERY_PERCENTAGE, (u32) dps.battery_pct);
+
+    /* Sent false as well as true, so the app clears the flag once a good cell
+     * goes in. */
+    (void) mcu_dp_bool_update(DPID_BATTERY_DAMAGED, dps.battery_damaged ? 1u : 0u);
 }

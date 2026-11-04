@@ -146,10 +146,21 @@ static bool module_unpaired;
  * belongs to the cell it was measured on. */
 static uint16_t battery_min_mv;
 
+/* The cell's collapse voltage, estimated over its windows (battery.h). It moves
+ * the battery percentage's 0 % point and says whether the cell is damaged.
+ *
+ * In RAM, so the reset a battery swap normally causes clears it, and so does
+ * a swap the MCU rides through: see Battery_IsNewCell. */
+static Battery_SagTrend sag_trend;
+
+/* The last resting voltage that could be read, for Battery_IsNewCell. 0 until
+ * the first. */
+static uint16_t previous_rest_mv;
+
 static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv);
 static bool PairingRequested(void);
 static bool ReportBackoffOver(void);
-static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10);
+static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint16_t rest_mv);
 static void UpdateBackoff(bool reached_cloud, bool pairing);
 static void WaitForNextCycle(void);
 
@@ -168,6 +179,8 @@ void TempSensorInit(void)
     report_hold_until_ms = next_cycle_ms;
     module_unpaired      = false;
     battery_min_mv       = 0u;
+    previous_rest_mv     = 0u;
+    Battery_SagTrendReset(&sag_trend);
 }
 
 void TempSensorRun(void)
@@ -190,9 +203,28 @@ void TempSensorRunCycle(void)
      * 3.3 V boost delivers roughly three times the module's current at the
      * cell, so a reading taken with the Wi-Fi rail up measures the sag and not
      * the charge. */
-    uint16_t      battery_mv    = BSP_Battery_ReadMv();
-    uint8_t       battery_pct   = Battery_PercentFromMv(battery_mv);
-    Battery_State battery_state = Battery_StateFromPercent(battery_pct);
+    uint16_t battery_mv = BSP_Battery_ReadMv();
+
+    if (Battery_IsNewCell(previous_rest_mv, battery_mv))
+    {
+        /* What was measured belongs to the cell that came out. A false alarm
+         * costs little: the next window measures this cell afresh. */
+        Battery_SagTrendReset(&sag_trend);
+        battery_min_mv = 0u;
+    }
+
+    if (battery_mv != 0u)
+    {
+        previous_rest_mv = battery_mv;
+    }
+
+    /* From the windows before this one: this cycle's own is still to come, and
+     * the DPs cannot change once the module is up -- it queries them twice
+     * per window. One report late, like DP 101. */
+    uint16_t      collapse_mv     = Battery_SagTrendMv(&sag_trend);
+    uint8_t       battery_pct     = Battery_UsablePercentFromMv(battery_mv, collapse_mv);
+    Battery_State battery_state   = Battery_StateFromPercent(battery_pct);
+    bool          battery_damaged = Battery_IsDamaged(collapse_mv);
 
     Hdc3020_Reading reading;
     bool            report_due = false;
@@ -207,7 +239,7 @@ void TempSensorRunCycle(void)
          * window can open with no report pending -- there has to be something
          * to answer with, and it should be this cycle's reading rather than
          * whatever the last report left behind. */
-        Tuya_SetDps(temp_c10, reading.rh_pct, battery_pct, battery_state);
+        Tuya_SetDps(temp_c10, reading.rh_pct, battery_pct, battery_state, battery_damaged);
     }
 
     /* A failed sensor read is not an error to handle, it is a cycle with
@@ -225,7 +257,7 @@ void TempSensorRunCycle(void)
      * its window only ends either hold if it gets through. */
     if ((report_due && backoff_over && !module_unpaired) || pairing)
     {
-        bool reached_cloud = RunWifiWindow(report_due, pairing, temp_c10);
+        bool reached_cloud = RunWifiWindow(report_due, pairing, temp_c10, battery_mv);
 
         UpdateBackoff(reached_cloud, pairing);
     }
@@ -301,13 +333,14 @@ static void UpdateBackoff(bool reached_cloud, bool pairing)
 }
 
 /* One report and/or pairing window, start to finish. Returns whether the
- * module reached the cloud.
+ * module reached the cloud. rest_mv is this cycle's resting cell voltage, to
+ * set the window's sag against.
  *
  * Every step has a deadline and every exit path goes through Tuya_PowerOff(),
  * because leaving the module powered is the one mistake that empties the cell
  * outright -- tens of milliamps against a budget built on microamps.
  */
-static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
+static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint16_t rest_mv)
 {
     bool reached_cloud = false;
 
@@ -376,6 +409,10 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10)
     /* After the supply, so the monitor covered all of it. Never left running:
      * its interrupt fires every ~170 us. */
     uint16_t window_min_mv = BSP_Battery_StopSagMonitor();
+
+    /* Every window counts, failed ones included: one whose sag browned the
+     * module out is the strongest evidence there is. */
+    Battery_SagTrendAdd(&sag_trend, Battery_CollapseMv(rest_mv, window_min_mv));
 
     if (reached_cloud)
     {
