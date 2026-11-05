@@ -154,9 +154,10 @@ Battery_State Battery_StateFromPercent(uint8_t percent)
 
 /* No AA rests above this: a fresh lithium cell is ~1.8 V, a NiMH off the
  * charger ~1.45 V. A resting reading above it is a bad reference read, not a
- * cell. Taken as a cell's first window it would set the trend to it -- and at
- * 15 mV a window, a good cell would read damaged for weeks. It also keeps every
- * value downstream small enough for the trend's 16-bit quarter-millivolts. */
+ * cell, and its window gives no sample. Two in a row would otherwise set the
+ * trend to them -- and at 15 mV a window, a good cell would read damaged for
+ * weeks. It also keeps every value downstream small enough for the trend's
+ * 16-bit quarter-millivolts. */
 #define CELL_MAX_MV 2000u
 
 uint16_t Battery_CollapseMv(uint16_t rest_mv, uint16_t min_mv)
@@ -199,6 +200,7 @@ uint16_t Battery_CollapseMv(uint16_t rest_mv, uint16_t min_mv)
 void Battery_SagTrendReset(Battery_SagTrend* trend)
 {
     trend->quarter_mv = 0u;
+    trend->last_mv    = 0u;
 }
 
 void Battery_SagTrendAdd(Battery_SagTrend* trend, uint16_t collapse_mv)
@@ -208,11 +210,32 @@ void Battery_SagTrendAdd(Battery_SagTrend* trend, uint16_t collapse_mv)
         return;
     }
 
+    /* A window counts only once the next one confirms it. One deep window
+     * says nothing a disturbed one would not: on 2026-11-05 a healthy cell's
+     * first window, likely while it was still being seated, went as deep as
+     * the failed cell's every window. What tells the failed cell apart is
+     * that it does it every time. So of each pair of windows in a row, the
+     * lower collapse voltage goes in. A real change shows one window later. */
+    uint16_t previous_mv = trend->last_mv;
+
+    trend->last_mv = collapse_mv;
+
+    if (previous_mv == 0u)
+    {
+        /* The cell's first window, with nothing to pair it with yet. */
+        return;
+    }
+
+    if (previous_mv < collapse_mv)
+    {
+        collapse_mv = previous_mv;
+    }
+
     if (trend->quarter_mv == 0u)
     {
-        /* The first window on this cell, with nothing to weigh it against.
-         * Taken whole, so a cell that is bad from the start reads so on the
-         * next report. */
+        /* The cell's first pair, with nothing to weigh it against. Taken
+         * whole, so a cell that is bad from the start reads so on its third
+         * report. */
         trend->quarter_mv = (uint16_t)(collapse_mv * 4u);
         return;
     }

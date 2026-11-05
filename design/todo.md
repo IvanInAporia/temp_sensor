@@ -344,8 +344,20 @@ report only.
 
 Then check, one report late each time:
 - **Healthy office Eneloop:** about 63 % at 1.286 V, DP 102 false.
-- **The failed Eneloop on the office board:** 0 % and Low from the second report after it
-  goes in, DP 102 true.
+- **The failed Eneloop on the office board:** 0 % and Low from the third report after it
+  goes in, DP 102 true. A window counts only once the next one confirms it.
+- **The Eneloop from 2026-11-05** (notes/Second battery attempt.txt): after a deep first
+  window, which the pairing now ignores, it went to ~860 mV at ~1.33 V. That reads 0 % and
+  damaged by itself, about as weak as the failed cell. Find out if it is:
+  - Which cell is it? If it's the office Eneloop that went to 945 mV at 1.286 V in October,
+    the change is more likely in the holder than the cell. Re-seat it and read the next
+    DP 101.
+  - On the scope, at the cell and at the board's input: is the minimum the module's
+    power-on inrush or a transmit burst, and how much does the holder add? The model
+    assumes constant power, and inrush isn't. If inrush sets the minimum, start the sag
+    monitor a few ms after power-on.
+  - Let it run. If the model is right, it stops reporting at about 1.23–1.30 V at rest. If
+    it keeps reporting below that, the model reads its sag too high.
 - **The failed Eneloop recharged:** DP 102 should still be true if its resistance stays
   high, even though its DP 101 looks like a healthy cell's. If it reads false, its
   resistance was high only because it was nearly flat.

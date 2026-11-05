@@ -304,20 +304,31 @@ Three details in the code:
 - **No square root.** `Vc ≈ 600 + P·R/600` mV is the tangent at 1.2 V. It only ever
   reads high, by at most 4 mV between 1.10 and 1.30 V and 9 mV at 1.05 and 1.35 V.
 - **A resting reading above 2 V gives no sample.** No AA rests that high, so it is a
-  bad reference read. Taken as a cell's first window, it would read 0 % and damaged
-  for weeks.
+  bad reference read. Two in a row would otherwise read 0 % and damaged for weeks.
 
-**Trend.** Each window gives one Vc sample, set against that cycle's resting voltage.
-Failed windows count too. The first sample on a cell sets the trend outright; after
-that each one is weighed at 1/4, and its pull is capped at ±60 mV first. So no single
-window moves the trend more than 15 mV: one window as deep as the failed cell's
-takes the healthy cell from 63 % to 61 %, not to 0 %. A sustained change gets there
-in about 7 windows. The price of taking the first window whole: if that one is an
-outlier as deep as the failed cell's, a healthy cell reads 0 % for four windows and
-damaged for six. The trend lives in RAM and is cleared on reset. A swap the MCU
-rides through on the 3.3 V rail's ~100 µF is caught by the resting voltage rising
-50 mV or more since the last cycle, which a cell in use never does. That also clears
-DP 101's carried minimum.
+**Trend.** Each window gives one Vc, set against that cycle's resting voltage.
+Failed windows count too.
+
+- **Each window is paired with the one before it, and only the lower Vc of the two
+  goes in.** A lone deep window never reaches the gauge, but two in a row do. On
+  2026-11-05 a healthy cell's first window went to 389 mV from 1.35 V, past half like
+  the failed cell, probably while the cell was still being seated. Taken whole, it
+  read 0 % and damaged. What tells the failed cell apart is that it does this on
+  every window.
+- **The first pair on a cell sets the trend outright.** After that, each sample is
+  weighed at 1/4, and its pull is capped at ±60 mV first. So no sample moves the
+  trend more than 15 mV, and a sustained change gets there in about 8 windows.
+
+Costs of the pairing:
+- A cell that is bad from the start reads damaged on its third report instead of
+  its second.
+- A cell that goes deep only on every other window reads as its better windows.
+  Its deep ones still show in DP 101.
+
+The trend lives in RAM and is cleared on reset. A swap the MCU rides through on the
+3.3 V rail's ~100 µF is caught by the resting voltage rising 50 mV or more since the
+last cycle, which a cell in use never does. That also clears DP 101's carried
+minimum.
 
 **Percentage.** The 0 % point moves up from 1.10 V to Vc + 50 mV, and the curve above
 it is stretched back over 0–100. So a full cell still reads 100, and 0 % arrives
@@ -353,11 +364,11 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  13504       8    1624   15136    3b20
+  13528       8    1632   15168    3b40
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~608 bytes and the stack has ~1440 available. Flash is 13.5 KB of
+static RAM is ~616 bytes and the stack has ~1430 available. Flash is 13.5 KB of
 16 KB, leaving ~2.8 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
 13.6 KB, so expect about 1.1 KB more at `-O2`.)
 

@@ -575,31 +575,53 @@ TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
 // How far the windows pull the cell down moves the gauge's 0 % point and says
 // whether the cell is damaged (DP 102). Each table is one cell's reports in
 // order. Like DP 101, one report late: a window's own sag is still being
-// measured while it reports, so it shows in the row below. battery_test.cpp
-// has the arithmetic behind each number.
+// measured while it reports, so it shows in the row below. And a window only
+// counts once the next one confirms it, so the gauge needs two windows on a
+// cell before it moves. battery_test.cpp has the arithmetic behind each number.
 
-TEST_F(TempSensorMainTest, TheFailedCellReadsEmptyAndDamagedFromItsSecondReport)
+TEST_F(TempSensorMainTest, TheFailedCellReadsEmptyAndDamagedFromItsThirdReport)
 {
     // The failed Eneloop: 1.29 V at rest, pulled to 0.58 V.
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1290,   580,   70,   kHigh,  false,  kNotSent }, // after boot: nothing measured yet
+        { 1290,   580,   70,   kHigh,  false,  580      }, // one window, waiting for a second
         { 1290,   580,    0,   kLow,   true,   580      },
         { 1290,   580,    0,   kLow,   true,   580      },
     });
 }
 
-TEST_F(TempSensorMainTest, OneDeepWindowBarelyMovesTheGauge)
+TEST_F(TempSensorMainTest, OneDeepWindowDoesNotMoveTheGauge)
 {
     // The healthy Eneloop, and one window as deep as the failed cell's.
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1286,   945,   67,   kHigh,  false,  kNotSent }, // after boot: the plain curve
-        { 1286,   945,   63,   kHigh,  false,  945      },
+        { 1286,   945,   67,   kHigh,  false,  945      }, // one window: still the plain curve
         { 1286,   580,   63,   kHigh,  false,  945      }, // the deep window
-        { 1286,   945,   61,   kHigh,  false,  580      },
-        { 1286,   945,   61,   kHigh,  false,  945      },
-        { 1286,   945,   62,   kHigh,  false,  945      },
+        { 1286,   945,   63,   kHigh,  false,  580      }, // it shows in DP 101 only
+        { 1286,   945,   63,   kHigh,  false,  945      },
+        { 1286,   945,   63,   kHigh,  false,  945      },
+    });
+}
+
+TEST_F(TempSensorMainTest, TheRunOf2026_11_05)
+{
+    // notes/Second battery attempt.txt: a charged Eneloop at 1.35 V, whose
+    // first window -- likely while it was still being seated -- went to
+    // 389 mV, below half. Taken whole, that window read 0 % and damaged from
+    // the second report. Now it waits for a second window and is outvoted.
+    //
+    // The windows after it went to ~860 mV, and those read 0 % and damaged on
+    // their own: by the model this cell sags nearly as far as the failed one
+    // (todo.md, "Gauge under load"). The resting voltages after the first are
+    // assumed; no DP reports them.
+    ExpectReports({
+        // rest   min   gauge  level   DP 102  DP 101
+        { 1350,   389,  100,   kHigh,  false,  kNotSent }, // 07:32, after the swap
+        { 1335,   864,  100,   kHigh,  false,  389      }, // 09:33: was 0 %, damaged
+        { 1330,   858,    0,   kLow,   true,   864      }, // 13:15
+        { 1325,   860,    0,   kLow,   true,   858      }, // 15:20
     });
 }
 
@@ -612,9 +634,11 @@ TEST_F(TempSensorMainTest, ACellSwappedWithoutAResetStartsOver)
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1290,   580,   70,   kHigh,  false,  kNotSent }, // the failed Eneloop
+        { 1290,   580,   70,   kHigh,  false,  580      },
         { 1290,   580,    0,   kLow,   true,   580      },
         { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // a cell off the charger
         { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // its 1.10 V is above DP 101's 1 V
+        { 1400,  1100,  100,   kHigh,  false,  kNotSent },
     });
 }
 
@@ -624,24 +648,27 @@ TEST_F(TempSensorMainTest, ARisingCellIsNotTakenForANewOne)
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1290,   580,   70,   kHigh,  false,  kNotSent },
+        { 1290,   580,   70,   kHigh,  false,  580      },
         { 1290,   580,    0,   kLow,   true,   580      },
         { 1330,   580,    0,   kLow,   true,   580      },
     });
 }
 
-TEST_F(TempSensorMainTest, AWindowThatNeverReachedTheCloudStillCounts)
+TEST_F(TempSensorMainTest, WindowsThatNeverReachedTheCloudStillCount)
 {
     // A window that fails never reports -- here the router is down; on the
     // front board the cell browned the module out. Its sag still counts, so
-    // the retry that does get through already reads empty and damaged.
+    // after two such windows the retry that does get through already reads
+    // empty and damaged.
     bspMockSetBatteryMv(1290u);
     bspMockSetSagMinMv(580u);
     ModuleBootsButNeverConnects();
     ASSERT_EQ(1, WindowsDuring(1)); // the report after boot, lost
+    ASSERT_EQ(1, WindowsDuring(1)); // its retry, five minutes later, lost too
 
     ModuleReachesCloud();
     int first = tuyaSdkMockDpCount();
-    ASSERT_EQ(1, WindowsDuring(1)); // its retry, five minutes later
+    ASSERT_EQ(1, WindowsDuring(1)); // the second retry
 
     BatteryReport report = BatteryReportSince(first);
 
@@ -659,6 +686,7 @@ TEST_F(TempSensorMainTest, AFailedRestingReadReadsFlatButKeepsTheTrend)
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1286,   945,   67,   kHigh,  false,  kNotSent },
+        { 1286,   945,   67,   kHigh,  false,  945      },
         { 1286,   945,   63,   kHigh,  false,  945      },
         {    0,   945,    0,   kLow,   false,  945      }, // the read fails
         { 1286,   945,   63,   kHigh,  false,  945      }, // 63, not 67: the trend held
@@ -675,9 +703,11 @@ TEST_F(TempSensorMainTest, ABadReferenceReadDoesNotMarkTheCellDamaged)
     ExpectReports({
         // rest   min   gauge  level   DP 102  DP 101
         { 1286,   945,   67,   kHigh,  false,  kNotSent },
+        { 1286,   945,   67,   kHigh,  false,  945      },
         { 1286,   945,   63,   kHigh,  false,  945      },
         { 4000,   945,  100,   kHigh,  false,  kNotSent }, // the bad read
         { 1286,   945,   67,   kHigh,  false,  945      }, // starting over: the plain curve
+        { 1286,   945,   67,   kHigh,  false,  945      }, // one window on the "new" cell
         { 1286,   945,   63,   kHigh,  false,  945      },
     });
 }

@@ -60,14 +60,20 @@ Battery_State Battery_StateFromPercent(uint8_t percent);
 uint16_t Battery_CollapseMv(uint16_t rest_mv, uint16_t min_mv);
 
 /* A running estimate of a cell's collapse voltage over its windows, which no
- * single window can move far: each one is weighed at 1/4 and pulls it 15 mV at
- * most. The first window on a cell sets it outright.
+ * single window can raise.
  *
- * The caller resets it when the cell changes. 0 mV means no window has been
- * measured on this cell yet.
+ * Each window is paired with the one before it, and only the lower of the two
+ * -- the less alarming -- goes in: a lone deep window is never seen, while two
+ * in a row are. So the trend starts with a cell's second window, from the lower
+ * of its first two. After that each one is weighed at 1/4 and pulls it 15 mV at
+ * most.
+ *
+ * The caller resets it when the cell changes. 0 mV means fewer than two windows
+ * have been measured on this cell.
  */
 typedef struct {
     uint16_t quarter_mv;
+    uint16_t last_mv;    /* the previous window's collapse voltage, 0 for none */
 } Battery_SagTrend;
 
 void     Battery_SagTrendReset(Battery_SagTrend* trend);

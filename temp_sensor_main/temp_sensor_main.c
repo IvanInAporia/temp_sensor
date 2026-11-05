@@ -208,7 +208,7 @@ void TempSensorRunCycle(void)
     if (Battery_IsNewCell(previous_rest_mv, battery_mv))
     {
         /* What was measured belongs to the cell that came out. A false alarm
-         * costs little: the next window measures this cell afresh. */
+         * costs little: the next two windows measure this cell afresh. */
         Battery_SagTrendReset(&sag_trend);
         battery_min_mv = 0u;
     }
@@ -410,8 +410,9 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint1
      * its interrupt fires every ~170 us. */
     uint16_t window_min_mv = BSP_Battery_StopSagMonitor();
 
-    /* Every window counts, failed ones included: one whose sag browned the
-     * module out is the strongest evidence there is. */
+    /* Every window counts, failed ones included: a cell whose sag browns the
+     * module out does it window after window, and that is the strongest
+     * evidence there is. A lone one is screened out by the trend. */
     Battery_SagTrendAdd(&sag_trend, Battery_CollapseMv(rest_mv, window_min_mv));
 
     if (reached_cloud)

@@ -273,9 +273,11 @@ TEST(BatteryTest, NoRestingReadingAbove2VIsTakenAsACell)
 // =========================================================================
 //
 // Battery_SagTrend. Each table is one cell's windows in order: the collapse
-// voltage the window measured, and the trend after it. Each window counts for
-// a quarter, but no window may pull it more than 60 mV before that -- so 15 mV
-// at most.
+// voltage the window measured, and the trend after it.
+//
+// Each window is paired with the one before it, and the lower of the two goes
+// in. That sample then counts for a quarter, but may pull the trend no more
+// than 60 mV before that -- so 15 mV at most.
 
 struct TrendRow {
     uint16_t window_mv;
@@ -307,66 +309,130 @@ TEST(BatteryTest, ATrendStartsEmpty)
     EXPECT_EQ(0u, Battery_SagTrendMv(&trend));
 }
 
-TEST(BatteryTest, TheFirstWindowSetsTheTrendOutright)
+TEST(BatteryTest, TheFirstWindowWaitsForASecond)
 {
-    // So a cell that is bad from the start reads so on the next report.
+    // One window alone could be a disturbed one, so the trend stays empty and
+    // the gauge reads the plain curve.
     ExpectTrend({
         // window  trend
-        { 1290,    1290 },
+        { 1290,       0 },
     });
 }
 
-TEST(BatteryTest, AWindowThatMeasuredNothingLeavesTheTrendAlone)
+TEST(BatteryTest, TheFirstPairSetsTheTrendOutright)
 {
+    // To the lower of the two -- so a cell that is bad from the start reads
+    // so on its third report.
     ExpectTrend({
         // window  trend
-        {    0,       0 }, // still empty
-        { 1200,    1200 },
+        { 1290,       0 },
+        { 1290,    1290 }, // the failed Eneloop, twice
+    });
+    ExpectTrend({
+        // window  trend
+        { 1290,       0 }, // deep, alone
+        { 1137,    1137 },
+    });
+    ExpectTrend({
+        // window  trend
+        { 1137,       0 },
+        { 1290,    1137 }, // deep, alone
+    });
+}
+
+TEST(BatteryTest, AWindowThatMeasuredNothingIsSkipped)
+{
+    // Neither a sample nor a break in the pairing: the windows either side of
+    // it pair up.
+    ExpectTrend({
+        // window  trend
+        {    0,       0 },
+        { 1200,       0 }, // the first window
+        {    0,       0 },
+        { 1210,    1200 }, // paired with the 1200 two windows back
         {    0,    1200 },
         {    0,    1200 },
     });
 }
 
-TEST(BatteryTest, AWindowCountsForAQuarter)
+TEST(BatteryTest, ASampleCountsForAQuarter)
 {
     ExpectTrend({
         // window  trend
+        { 1100,       0 },
         { 1100,    1100 },
+        { 1140,    1100 }, // paired with 1100: no sample above the trend yet
         { 1140,    1110 }, // a quarter of 40 mV
         { 1140,    1118 }, // 1117.5: the fraction is kept, not dropped
         { 1140,    1123 },
     });
 }
 
-TEST(BatteryTest, AWindowFarAboveTheTrendMovesIt15Mv)
+TEST(BatteryTest, ALoneDeepWindowNeverReachesTheTrend)
+{
+    // The healthy Eneloop, and one window as deep as the failed cell's.
+    ExpectTrend({
+        // window  trend
+        { 1137,       0 },
+        { 1137,    1137 },
+        { 1290,    1137 }, // paired with the 1137 before it
+        { 1137,    1137 }, // and with the 1137 after it
+        { 1137,    1137 },
+    });
+}
+
+TEST(BatteryTest, WindowsFarAboveTheTrendMoveIt15MvFromTheSecond)
 {
     ExpectTrend({
         // window  trend
+        { 1100,       0 },
         { 1100,    1100 },
-        { 1300,    1115 }, // a quarter of 60 mV, not of 200
+        { 1300,    1100 }, // alone so far
+        { 1300,    1115 }, // confirmed: a quarter of 60 mV, not of 200
         { 1300,    1130 },
         { 1300,    1145 },
     });
 }
 
-TEST(BatteryTest, AWindowFarBelowTheTrendMovesIt15Mv)
+TEST(BatteryTest, AWindowFarBelowTheTrendMovesIt15MvAtOnce)
 {
+    // The lower of a pair is the new window itself, so a window below the
+    // trend needs no second. Still 15 mV at most.
     ExpectTrend({
         // window  trend
+        { 1100,       0 },
         { 1100,    1100 },
         {  900,    1085 },
         {  900,    1070 },
     });
 }
 
+TEST(BatteryTest, WindowsThatAlternateAreReadByTheBetterOnes)
+{
+    // The price of the pairing: a cell that goes deep on every other window
+    // only, never two in a row, reads as its better windows. Its deep ones
+    // still show in DP 101.
+    ExpectTrend({
+        // window  trend
+        { 1137,       0 },
+        { 1290,    1137 },
+        { 1137,    1137 },
+        { 1290,    1137 },
+        { 1137,    1137 },
+        { 1290,    1137 },
+    });
+}
+
 TEST(BatteryTest, ASustainedChangeIsFollowedAllTheWay)
 {
-    // 200 mV in 21 windows, to within 2 mV.
+    // 200 mV in 22 windows, to within 2 mV: one window to confirm it, then
+    // 15 mV a window and less as it closes in.
     Battery_SagTrend trend;
     Battery_SagTrendReset(&trend);
     Battery_SagTrendAdd(&trend, 1100);
+    Battery_SagTrendAdd(&trend, 1100);
 
-    for (int window = 0; window < 21; window++)
+    for (int window = 0; window < 22; window++)
     {
         Battery_SagTrendAdd(&trend, 1300);
     }
@@ -376,19 +442,25 @@ TEST(BatteryTest, ASustainedChangeIsFollowedAllTheWay)
 
 TEST(BatteryTest, AResetForgetsTheCell)
 {
+    // A healthy cell comes out and the failed one goes in. Had its last window
+    // been kept, the failed cell's first window would pair with it and seed
+    // the trend as healthy.
     Battery_SagTrend trend;
     Battery_SagTrendReset(&trend);
-    Battery_SagTrendAdd(&trend, 1290);
+    Battery_SagTrendAdd(&trend, 1137);
+    Battery_SagTrendAdd(&trend, 1137);
 
     Battery_SagTrendReset(&trend);
     EXPECT_EQ(0u, Battery_SagTrendMv(&trend));
 
-    // The next cell's first window is taken whole, not stepped towards.
-    Battery_SagTrendAdd(&trend, 1137);
-    EXPECT_EQ(1137u, Battery_SagTrendMv(&trend));
+    Battery_SagTrendAdd(&trend, 1290);
+    EXPECT_EQ(0u, Battery_SagTrendMv(&trend)); // its first window, alone
+
+    Battery_SagTrendAdd(&trend, 1290);
+    EXPECT_EQ(1290u, Battery_SagTrendMv(&trend)); // taken whole, not stepped towards
 }
 
-TEST(BatteryTest, NoWindowMovesTheTrendMoreThan15MvOrPastItself)
+TEST(BatteryTest, NoWindowMovesTheTrendMoreThan15MvOrPastItsPair)
 {
     // Fixed pseudo-random runs of windows over everything Battery_CollapseMv
     // can return: mostly a random walk, now and then a jump anywhere, and
@@ -405,9 +477,10 @@ TEST(BatteryTest, NoWindowMovesTheTrendMoreThan15MvOrPastItself)
         Battery_SagTrend trend;
         Battery_SagTrendReset(&trend);
 
-        int window_mv = 600 + static_cast<int>(next() % 1401u);
-        int lowest    = 2000;
-        int highest   = 0;
+        int window_mv   = 600 + static_cast<int>(next() % 1401u);
+        int previous_mv = 0; // the last window that measured something
+        int lowest      = 2000;
+        int highest     = 0;
 
         for (int window = 0; window < 100; window++)
         {
@@ -435,22 +508,41 @@ TEST(BatteryTest, NoWindowMovesTheTrendMoreThan15MvOrPastItself)
                 continue;
             }
 
-            lowest  = std::min(lowest, static_cast<int>(measured));
-            highest = std::max(highest, static_cast<int>(measured));
+            int paired_with = previous_mv;
+            previous_mv     = measured;
+
+            if (paired_with == 0)
+            {
+                // The cell's first window: nothing yet.
+                ASSERT_EQ(0, after) << "run " << run << ", window " << window;
+                continue;
+            }
+
+            int sample = std::min(paired_with, static_cast<int>(measured));
+
+            lowest  = std::min(lowest, sample);
+            highest = std::max(highest, sample);
 
             if (before == 0)
             {
-                ASSERT_EQ(measured, after) << "run " << run << ", window " << window;
+                ASSERT_EQ(sample, after) << "run " << run << ", window " << window;
                 continue;
             }
 
             ASSERT_LE(std::abs(after - before), 15) << "run " << run << ", window " << window;
 
-            // Towards the window, and never past it.
-            ASSERT_LE(std::min(before, static_cast<int>(measured)), after) << "run " << run << ", window " << window;
-            ASSERT_GE(std::max(before, static_cast<int>(measured)), after) << "run " << run << ", window " << window;
+            // Towards the lower of the pair, and never past it.
+            ASSERT_LE(std::min(before, sample), after) << "run " << run << ", window " << window;
+            ASSERT_GE(std::max(before, sample), after) << "run " << run << ", window " << window;
 
-            // So never outside what this cell's windows measured.
+            // So it rises only when both windows of the pair are above it...
+            if (after > before)
+            {
+                ASSERT_GT(paired_with, before) << "run " << run << ", window " << window;
+                ASSERT_GT(static_cast<int>(measured), before) << "run " << run << ", window " << window;
+            }
+
+            // ...and never leaves the range of what the pairs measured.
             ASSERT_LE(lowest, after) << "run " << run << ", window " << window;
             ASSERT_GE(highest, after) << "run " << run << ", window " << window;
         }
@@ -705,8 +797,8 @@ TEST(BatteryTest, ANewCellIsARiseOf50MvOrMore)
 //
 // Every step at once: the collapse voltage of a window, the trend it seeds,
 // and what DP 4 (percentage), DP 3 (level) and DP 102 (damaged) then say. Each
-// row is one window, the cell's first -- or what a cell whose windows all sag
-// alike settles at.
+// row is a cell's first two windows, alike -- or what a cell whose windows all
+// sag alike settles at.
 //
 // (*) Not measured: the cell's measured P.R carried to another resting
 //     voltage, as if its resistance held.
@@ -749,6 +841,7 @@ TEST(BatteryTest, WholeCells)
 
         Battery_SagTrend trend;
         Battery_SagTrendReset(&trend);
+        Battery_SagTrendAdd(&trend, collapse_mv);
         Battery_SagTrendAdd(&trend, collapse_mv);
 
         uint16_t trend_mv = Battery_SagTrendMv(&trend);
@@ -798,32 +891,46 @@ void ExpectWindows(uint16_t rest_mv, std::initializer_list<WindowRow> rows)
     }
 }
 
-TEST(BatteryTest, AHealthyCellBarelyMovesForOneDeepWindow)
+TEST(BatteryTest, AHealthyCellIgnoresOneDeepWindow)
 {
     // The healthy Eneloop at 1286 mV, and one window as deep as the failed
     // cell's -- taken alone, that window would read 0 % and damaged.
     ExpectWindows(1286, {
         // window  trend  gauge  level    DP 102
+        { 1137,       0,   67,   kHigh,   false }, // one window: the plain curve
         { 1137,    1137,   63,   kHigh,   false },
-        { 1286,    1152,   61,   kHigh,   false }, // pulled to 580 mV
-        { 1137,    1148,   61,   kHigh,   false },
-        { 1137,    1146,   62,   kHigh,   false },
-        { 1137,    1143,   62,   kHigh,   false },
-        { 1137,    1142,   62,   kHigh,   false },
-        { 1137,    1141,   62,   kHigh,   false },
-        { 1137,    1140,   62,   kHigh,   false },
+        { 1286,    1137,   63,   kHigh,   false }, // pulled to 580 mV
+        { 1137,    1137,   63,   kHigh,   false },
+        { 1137,    1137,   63,   kHigh,   false },
+        { 1137,    1137,   63,   kHigh,   false },
+    });
+}
+
+TEST(BatteryTest, ADeepFirstWindowIsIgnoredToo)
+{
+    // What happened on 2026-11-05: a healthy cell's first window, likely while
+    // it was still being seated, as deep as the failed cell's. Taken whole, it
+    // read 0 % and damaged.
+    ExpectWindows(1286, {
+        // window  trend  gauge  level    DP 102
+        { 1286,       0,   67,   kHigh,   false }, // pulled to 580 mV
+        { 1137,    1137,   63,   kHigh,   false },
+        { 1137,    1137,   63,   kHigh,   false },
+        { 1137,    1137,   63,   kHigh,   false },
     });
 }
 
 TEST(BatteryTest, AHealthyCellThatStartsToSagLikeTheFailedOne)
 {
-    // From the second window on, every window as deep as the failed cell's:
-    // the cell or its holder going bad. DP 102 comes on at the sixth window
-    // and the gauge is at 0 % by the eighth -- about a day at six reports a
-    // day.
+    // From the third window on, every window as deep as the failed cell's:
+    // the cell or its holder going bad. The first of them waits for the
+    // second; then DP 102 comes on at the eighth window and the gauge is at
+    // 0 % by the tenth -- under two days at six reports a day.
     ExpectWindows(1286, {
         // window  trend  gauge  level    DP 102
+        { 1137,       0,   67,   kHigh,   false },
         { 1137,    1137,   63,   kHigh,   false },
+        { 1286,    1137,   63,   kHigh,   false }, // alone so far
         { 1286,    1152,   61,   kHigh,   false },
         { 1286,    1167,   58,   kMiddle, false },
         { 1286,    1182,   55,   kMiddle, false },
@@ -835,34 +942,14 @@ TEST(BatteryTest, AHealthyCellThatStartsToSagLikeTheFailedOne)
         { 1286,    1261,    0,   kLow,    true  },
         { 1286,    1267,    0,   kLow,    true  },
         { 1286,    1272,    0,   kLow,    true  },
-        { 1286,    1276,    0,   kLow,    true  },
     });
 }
 
-TEST(BatteryTest, ADeepFirstWindowMarksAHealthyCellDamagedForSixWindows)
-{
-    // The cost of taking a cell's first window whole: if it happens to be as
-    // deep as the failed cell's, the healthy Eneloop reads 0 % for four
-    // windows and damaged for six, before it settles.
-    ExpectWindows(1286, {
-        // window  trend  gauge  level    DP 102
-        { 1286,    1286,    0,   kLow,    true  }, // pulled to 580 mV
-        { 1137,    1271,    0,   kLow,    true  },
-        { 1137,    1256,    0,   kLow,    true  },
-        { 1137,    1241,    0,   kLow,    true  },
-        { 1137,    1226,   20,   kLow,    true  },
-        { 1137,    1211,   38,   kMiddle, true  },
-        { 1137,    1196,   49,   kMiddle, false },
-        { 1137,    1181,   55,   kMiddle, false },
-        { 1137,    1170,   57,   kMiddle, false },
-        { 1137,    1162,   59,   kMiddle, false },
-    });
-}
-
-TEST(BatteryTest, TheFailedCellReadsEmptyAndDamagedFromItsFirstWindow)
+TEST(BatteryTest, TheFailedCellReadsEmptyAndDamagedFromItsSecondWindow)
 {
     ExpectWindows(1290, {
         // window  trend  gauge  level    DP 102
+        { 1290,       0,   70,   kHigh,   false }, // one window: the plain curve
         { 1290,    1290,    0,   kLow,    true  },
         { 1290,    1290,    0,   kLow,    true  },
     });
