@@ -242,10 +242,34 @@ samples them from an interrupt
 ([`BSP_Battery_StartSagMonitor`](../libs/src/bsp/bsp.h)):
 
 - **The ADC runs continuously** over the cell pin and VREFINT, back to back in one
-  scan. Its end-of-conversion interrupt keeps the pair with the lowest
-  cell/VREFINT ratio.
+  scan. Its end-of-conversion interrupt keeps two things: the pair with the lowest
+  cell/VREFINT ratio, and the lowest point of a running average of the pairs.
   - Each sample carries its own reference because the failing case is exactly when
     the boost stops holding 3.3 V, and a sagging VDDA reads a sagging cell high.
+  - The arithmetic is `Battery_SagSamples` in
+    [`battery.c`](../libs/src/battery/battery.c), so the host tests cover it. The
+    interrupt only feeds it pairs.
+- **Why an average.** On the scope on 2026-11-06, a brand-new cell went from
+  1.336 V to ~0.8 V on its transmit bursts, which come about every other pair at
+  the monitor's rate. Once per window there was also a single narrow spike to
+  0.49 V, at the start of the radio's activity. The lowest single reading catches
+  the spike, and taken at face value it says a new cell is as weak as the failed
+  one. So what matters is how far the cell stays down over a longer time:
+  - Each pair counts for 1/128 of the average, about 22 ms at a pair every
+    ~171 µs. The weight is `SAG_AVERAGE_SHIFT` in `battery.c`, to be set from the
+    DP 103 history.
+  - The average starts at the window's first pair, so it doesn't climb from 0.
+  - Cell and VREFINT are averaged separately and then taken as a ratio.
+  - A lone spike moves the average 1/128 of the way, and a 1 ms dip about 1/20.
+    A sag that lasts a tenth of a second shows in full. Bursts on every other
+    pair to 0.8 V, between which the cell recovers to 1.25 V, read as their mean,
+    about 1.02 V.
+- **Why ~22 ms and not ~1.3 ms.** The first build weighted each pair 1/8, on the
+  idea that the rail's capacitors carry the module through anything shorter
+  than a millisecond. On 2026-11-06 a brand-new Duracell then read 470-750 mV.
+  Its one deep dip, 0.40 V for about a millisecond, pulled an average that short
+  half way down to it. The module rides that dip out, so it does not show what
+  the cell can deliver.
 - **Wait mode** holds each conversion until the last result has been read. So a
   late interrupt leaves a gap in the sampling, never a torn pair. That is also why
   its priority is the lowest there is.
@@ -274,8 +298,14 @@ the boost still has plenty of margin there, and the DP would only be noise in th
 app's history (the threshold is in
 [`tuya_link.c`](../libs/src/tuya_link/tuya_link.c)).
 
-**The DP has to exist on the Tuya platform:** ID 101, Value, report only,
-0..3300, step 1, scale 0, unit mV. See the `PORTED` note in
+The lowest point of the average goes out the same way, as **DP 103**
+(`battery_avg_min_voltage`, mV), and this is what the gauge uses. It is carried
+across failed windows and cleared on a battery swap, like DP 101, but it has no
+threshold: until the gauge's thresholds are set from its history, every value is
+worth having, a healthy cell's most of all.
+
+**Both DPs have to exist on the Tuya platform:** ID 101 and ID 103, Value, report
+only, 0..3300, step 1, scale 0, unit mV. See the `PORTED` notes in
 [`protocol.h`](../tuya/protocol.h).
 
 ### The gauge under load
@@ -296,6 +326,13 @@ reference points:
 | Failed Eneloop | 1.29 V | 0.58 V | past the limit: below Vrest/2 |
 
 The failed cell's limit matches the 1.28 V it stopped working at on the front board.
+
+**Vmin is the averaged minimum (DP 103)**, since 2026-11-06. Both reference
+points above, and the thresholds below (1210 mV damaged, the 50 mV margin), came
+from the lowest single reading, before the average existed. On 2026-11-06 a
+brand-new cell's lowest single reading sagged as far as the failed cell's, so these
+numbers are provisional. They are to be set again from the DP 103 history (todo.md).
+
 Three details in the code:
 
 - **A sag to half the resting voltage or below reads as collapsing at the resting
@@ -364,12 +401,12 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  13528       8    1632   15168    3b40
+  13784       8    1648   15440    3c50
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~616 bytes and the stack has ~1430 available. Flash is 13.5 KB of
-16 KB, leaving ~2.8 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
+static RAM is ~632 bytes and the stack has ~1410 available. Flash is 13.8 KB of
+16 KB, leaving ~2.6 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
 13.6 KB, so expect about 1.1 KB more at `-O2`.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look

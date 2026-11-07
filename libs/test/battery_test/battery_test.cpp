@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <iterator>
+#include <vector>
 
 extern "C" {
 #include "battery.h"
@@ -160,6 +161,262 @@ TEST(BatteryTest, LevelsMatchTheTuyaWireCodes)
     EXPECT_EQ(0, static_cast<int>(Battery_State_Low));
     EXPECT_EQ(1, static_cast<int>(Battery_State_Middle));
     EXPECT_EQ(2, static_cast<int>(Battery_State_High));
+}
+
+// =========================================================================
+// The sag monitor's samples: one window's readings
+// =========================================================================
+//
+// Battery_SagSamples, fed the way the sag monitor's interrupt feeds it: one
+// pair every ~171 us. Each row is one window, written as the cell voltage of
+// each pair in turn, and what it gives: the lowest single reading (DP 101) and
+// the lowest point of the running average (DP 103, and what the gauge uses).
+//
+// The rows are in millivolts, turned into counts as the ADC sees them with the
+// 3.3 V rail holding: VREFINT (1.224 V) reads 379 counts, and one count is
+// 3.2 mV. So a value can read back a millivolt or two off: 1336 as 1337.
+
+constexpr uint16_t kVrefintCounts = 379;
+constexpr double   kVrefintMv     = 1224.0;
+
+uint16_t CellCounts(int mv)
+{
+    return static_cast<uint16_t>(std::lround(mv * kVrefintCounts / kVrefintMv));
+}
+
+int PairMv(Battery_AdcPair pair)
+{
+    return (pair.vrefint == 0) ? 0 : static_cast<int>(std::lround(pair.cell * kVrefintMv / pair.vrefint));
+}
+
+using Window = std::vector<int>; // the cell voltage of each pair, in mV
+
+// `pairs` pairs at one voltage.
+Window Steady(int mv, int pairs)
+{
+    return Window(static_cast<size_t>(pairs), mv);
+}
+
+// `pairs` pairs of transmit bursts: every `period`th pair pulled to low_mv,
+// the rest at high_mv.
+Window Bursts(int high_mv, int low_mv, int pairs, int period)
+{
+    Window window;
+
+    for (int i = 0; i < pairs; i++)
+    {
+        window.push_back((i % period) == 0 ? low_mv : high_mv);
+    }
+
+    return window;
+}
+
+Window Then(std::initializer_list<Window> parts)
+{
+    Window window;
+
+    for (const Window& part : parts)
+    {
+        window.insert(window.end(), part.begin(), part.end());
+    }
+
+    return window;
+}
+
+struct SamplesRow {
+    Window      window;
+    int         lowest_mv;
+    int         average_mv;
+    const char* note;
+};
+
+// The scope's dense region: transmit bursts on every other pair, the cell
+// back only to 1.25 V between them, for half a second.
+Window Dense()
+{
+    return Bursts(1250, 800, 3000, 2);
+}
+
+const SamplesRow kSamples[] = {
+    // A pair is ~0.17 ms, so 6 pairs are ~1 ms, 128 are ~22 ms and 600 are
+    // ~0.1 s.
+    //
+    // window                                                         lowest  average
+    { {},                                                                  0,      0, "nothing measured" },
+    { Steady(1336, 20),                                                 1337,   1337, "at rest: the average starts at the first pair, not climbing from 0" },
+    { Then({ Steady(1336, 20), Steady(490, 1), Steady(1336, 20) }),      491,   1331, "one spike: it moves the average 1/128 of the way" },
+    { Then({ Steady(1336, 20), Steady(400, 6), Steady(1336, 20) }),      400,   1295, "the dip on the scope: 0.40 V for ~1 ms" },
+    { Then({ Steady(1336, 20), Steady(400, 18), Steady(1336, 20) }),     400,   1214, "the same dip ~3 ms long, as the 1/8 average's lowest readings point to" },
+    { Then({ Steady(1336, 20), Steady(800, 128), Steady(1336, 20) }),    801,    998, "a sag ~22 ms long: ~2/3 of the way" },
+    { Then({ Steady(1336, 20), Steady(800, 600) }),                      801,    804, "a sag that lasts 0.1 s: all but a few mV" },
+    { Then({ Steady(1336, 20), Steady(800, 3000) }),                     801,    801, "a sag that lasts 0.5 s: all the way" },
+    { Then({ Steady(1336, 20), Bursts(1336, 800, 3000, 4) }),            801,   1201, "bursts on one pair in four" },
+    { Then({ Steady(1336, 20), Bursts(1336, 800, 3000, 2) }),            801,   1069, "bursts on every other pair" },
+    { Then({ Steady(1336, 20), Dense() }),                               801,   1024, "the dense region: read as its mean" },
+    { Then({ Steady(1336, 20), Dense(), Steady(400, 6), Dense() }),      400,    998, "the dense region with the ~1 ms dip in it" },
+    { Then({ Steady(1336, 20), Dense(), Steady(400, 18), Dense() }),     400,    943, "the dense region with a ~3 ms dip in it" },
+    { Then({ Steady(1290, 20), Steady(580, 3000) }),                     581,    581, "the failed Eneloop, if its sag lasts" },
+};
+
+TEST(BatteryTest, TheSagMonitorsSamples)
+{
+    for (const SamplesRow& row : kSamples)
+    {
+        Battery_SagSamples samples;
+        Battery_SagSamplesReset(&samples);
+
+        for (int mv : row.window)
+        {
+            Battery_SagSamplesAdd(&samples, CellCounts(mv), kVrefintCounts);
+        }
+
+        EXPECT_EQ(row.lowest_mv, PairMv(Battery_SagSamplesLowest(&samples))) << row.note;
+        EXPECT_EQ(row.average_mv, PairMv(Battery_SagSamplesLowestAverage(&samples))) << row.note;
+    }
+}
+
+TEST(BatteryTest, TheSamplesCompareVoltagesNotCounts)
+{
+    // The 3.3 V rail sags to 3.0 V: VREFINT now reads 417 counts, and a cell
+    // at 1290 mV reads 440 -- more counts than the 414 that 1336 mV read
+    // before, yet a lower voltage.
+    Battery_SagSamples samples;
+    Battery_SagSamplesReset(&samples);
+
+    Battery_SagSamplesAdd(&samples, 414, 379); // 1336 mV, rail at 3.3 V
+    Battery_SagSamplesAdd(&samples, 440, 417); // 1290 mV, rail at 3.0 V
+
+    Battery_AdcPair lowest = Battery_SagSamplesLowest(&samples);
+
+    EXPECT_EQ(440u, lowest.cell);
+    EXPECT_EQ(417u, lowest.vrefint);
+    EXPECT_EQ(1292, PairMv(lowest));
+}
+
+TEST(BatteryTest, TheAverageHoldsWhenTheRailSags)
+{
+    // A failing cell is when the 3.3 V rail sags, and a sagging rail raises
+    // both counts: at 2.0 V, VREFINT reads 626 and a cell at 1336 mV 683. Two
+    // averages kept in 128ths of a count that size multiply past 32 bits, so
+    // the comparison has to drop precision first. The same 0.1 s sag to
+    // 800 mV as in kSamples, and the same reading.
+    const double rail_mv = 2000.0;
+
+    auto counts = [rail_mv](double mv) { return static_cast<uint16_t>(std::lround(mv / rail_mv * 1023.0)); };
+
+    Battery_SagSamples samples;
+    Battery_SagSamplesReset(&samples);
+
+    for (int pair = 0; pair < 20; pair++)
+    {
+        Battery_SagSamplesAdd(&samples, counts(1336), counts(kVrefintMv));
+    }
+
+    for (int pair = 0; pair < 600; pair++)
+    {
+        Battery_SagSamplesAdd(&samples, counts(800), counts(kVrefintMv));
+    }
+
+    ASSERT_EQ(626u, Battery_SagSamplesLowestAverage(&samples).vrefint);
+    EXPECT_EQ(804, PairMv(Battery_SagSamplesLowestAverage(&samples)));
+}
+
+TEST(BatteryTest, APairWithoutAReferenceIsSkipped)
+{
+    // A VREFINT of 0 is not a reading: it would make any cell count the
+    // lowest there is.
+    Battery_SagSamples samples;
+    Battery_SagSamplesReset(&samples);
+
+    Battery_SagSamplesAdd(&samples, 414, 0);
+    EXPECT_EQ(0, PairMv(Battery_SagSamplesLowest(&samples)));
+    EXPECT_EQ(0, PairMv(Battery_SagSamplesLowestAverage(&samples)));
+
+    Battery_SagSamplesAdd(&samples, 414, 379);
+    Battery_SagSamplesAdd(&samples, 100, 0);
+
+    EXPECT_EQ(1337, PairMv(Battery_SagSamplesLowest(&samples)));
+    EXPECT_EQ(1337, PairMv(Battery_SagSamplesLowestAverage(&samples)));
+
+    // Nor does it touch the average: taken in, it would drag the averaged
+    // VREFINT down and hide the burst that follows.
+    Battery_SagSamplesAdd(&samples, 100, 0);
+
+    for (int pair = 0; pair < 128; pair++)
+    {
+        Battery_SagSamplesAdd(&samples, CellCounts(800), kVrefintCounts);
+    }
+
+    EXPECT_EQ(801, PairMv(Battery_SagSamplesLowest(&samples)));
+    EXPECT_EQ(998, PairMv(Battery_SagSamplesLowestAverage(&samples))); // as in kSamples: a sag ~22 ms long
+}
+
+TEST(BatteryTest, AResetForgetsTheWindow)
+{
+    Battery_SagSamples samples;
+    Battery_SagSamplesReset(&samples);
+    Battery_SagSamplesAdd(&samples, CellCounts(800), kVrefintCounts);
+
+    Battery_SagSamplesReset(&samples);
+    EXPECT_EQ(0, PairMv(Battery_SagSamplesLowest(&samples)));
+    EXPECT_EQ(0, PairMv(Battery_SagSamplesLowestAverage(&samples)));
+
+    // The next window's average starts from its own first pair.
+    Battery_SagSamplesAdd(&samples, CellCounts(1336), kVrefintCounts);
+    EXPECT_EQ(1337, PairMv(Battery_SagSamplesLowestAverage(&samples)));
+}
+
+TEST(BatteryTest, TheAverageStaysBetweenTheLowestPairAndTheFirst)
+{
+    // Fixed pseudo-random windows: a rail that wanders between 2.9 and 3.4 V,
+    // and cells anywhere from 0.3 to 1.5 V. However the pairs come, the
+    // average's lowest point is never deeper than the deepest pair, nor
+    // higher than where the window started; and the lowest pair is the lowest.
+    // Within two counts, for the rounding of the average.
+    uint32_t seed = 54321u;
+
+    auto next = [&seed]() {
+        seed = (seed * 1664525u) + 1013904223u;
+        return seed >> 8;
+    };
+
+    auto ratio = [](Battery_AdcPair pair) { return static_cast<double>(pair.cell) / pair.vrefint; };
+
+    for (int run = 0; run < 300; run++)
+    {
+        Battery_SagSamples samples;
+        Battery_SagSamplesReset(&samples);
+
+        double first  = 0.0;
+        double lowest = 1e9;
+
+        for (int pair = 0; pair < 200; pair++)
+        {
+            double   rail_mv     = 2900.0 + (next() % 501u);
+            double   cell_mv     = 300.0 + (next() % 1201u);
+            uint16_t vrefint_raw = static_cast<uint16_t>(std::lround(kVrefintMv / rail_mv * 1023.0));
+            uint16_t cell_raw    = static_cast<uint16_t>(std::lround(cell_mv / rail_mv * 1023.0));
+
+            Battery_SagSamplesAdd(&samples, cell_raw, vrefint_raw);
+
+            double this_ratio = static_cast<double>(cell_raw) / vrefint_raw;
+
+            if (pair == 0)
+            {
+                first = this_ratio;
+            }
+
+            lowest = std::min(lowest, this_ratio);
+
+            ASSERT_DOUBLE_EQ(lowest, ratio(Battery_SagSamplesLowest(&samples))) << "run " << run << ", pair " << pair;
+
+            double average = ratio(Battery_SagSamplesLowestAverage(&samples));
+            double slack   = 2.0 / 379.0; // two counts of the cell, as a ratio
+
+            ASSERT_GE(average, lowest - slack) << "run " << run << ", pair " << pair;
+            ASSERT_LE(average, first + slack) << "run " << run << ", pair " << pair;
+        }
+    }
 }
 
 // =========================================================================

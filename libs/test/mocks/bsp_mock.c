@@ -30,6 +30,7 @@ static uint32_t battery_last_read_ms;
 static int      battery_read_calls;
 
 static uint16_t sag_min_mv;
+static uint16_t sag_average_min_mv;
 static bool     sag_running;
 static bool     sag_covered_window;
 static int      sleeps_with_sag_running;
@@ -81,6 +82,7 @@ void bspMockReset(void)
     battery_read_calls   = 0;
 
     sag_min_mv              = 0u;
+    sag_average_min_mv      = 0u;
     sag_running             = false;
     sag_covered_window      = false;
     sleeps_with_sag_running = 0;
@@ -321,18 +323,29 @@ void BSP_Battery_StartSagMonitor(void)
     sag_running = true;
 }
 
-uint16_t BSP_Battery_StopSagMonitor(void)
+BSP_SagReading BSP_Battery_StopSagMonitor(void)
 {
-    bool was_running = sag_running;
+    BSP_SagReading reading = { 0u, 0u };
+
+    if (sag_running)
+    {
+        reading.min_mv         = sag_min_mv;
+        reading.average_min_mv = sag_average_min_mv;
+    }
 
     sag_running = false;
 
-    return was_running ? sag_min_mv : 0u;
+    return reading;
 }
 
 void bspMockSetSagMinMv(uint16_t mv)
 {
     sag_min_mv = mv;
+}
+
+void bspMockSetSagAverageMinMv(uint16_t mv)
+{
+    sag_average_min_mv = mv;
 }
 
 bool bspMockSagMonitorRunning(void)

@@ -44,27 +44,32 @@ constexpr int kCloudCalls = 20;
 constexpr Battery_State kLow  = Battery_State_Low;
 constexpr Battery_State kHigh = Battery_State_High;
 
-// DP 101 left out of a report.
+// DP 101 or 103 left out of a report.
 constexpr int kNotSent = -1;
 
 // What one report window said about the cell. -1 for a DP it left out.
 struct BatteryReport {
-    int percent = -1; // DP 4
-    int level   = -1; // DP 3
-    int damaged = -1; // DP 102, 0 or 1
-    int min_mv  = -1; // DP 101
+    int percent        = -1; // DP 4
+    int level          = -1; // DP 3
+    int damaged        = -1; // DP 102, 0 or 1
+    int min_mv         = -1; // DP 101
+    int average_min_mv = -1; // DP 103
 };
 
 // One row of a table of a cell's reports, in order. The cell rests at rest_mv
-// when the cycle reads it, and the report's window pulls it to min_mv. The
-// DPs come from the windows before: a window's own sag shows in the row below.
+// when the cycle reads it, and the report's window pulls it to min_mv at its
+// lowest single reading and to avg_mv at the lowest point of its running
+// average. The DPs come from the windows before: a window's own sag shows in
+// the row below.
 struct ReportRow {
     uint16_t      rest_mv;
     uint16_t      min_mv;
+    uint16_t      avg_mv;
     int           percent;  // DP 4
     Battery_State level;    // DP 3
     bool          damaged;  // DP 102
     int           dp101_mv; // the lowest of the windows before, or kNotSent
+    int           dp103_mv; // the lowest average of the windows before, or kNotSent
 };
 
 class TempSensorMainTest : public ::testing::Test {
@@ -191,6 +196,7 @@ protected:
             case DPID_BATTERY_STATE:       report.level   = value; break;
             case DPID_BATTERY_DAMAGED:     report.damaged = value; break;
             case DPID_BATTERY_MIN_VOLTAGE: report.min_mv  = value; break;
+            case DPID_BATTERY_AVG_MIN_VOLTAGE: report.average_min_mv = value; break;
             default: break;
             }
         }
@@ -199,12 +205,14 @@ protected:
     }
 
     // The cell rests at `rest_mv`, and the next report's window pulls it to
-    // `min_mv`. Runs until that report has gone out -- the one after boot,
-    // the first time -- and returns what it said.
-    BatteryReport Report(uint16_t rest_mv, uint16_t min_mv)
+    // `min_mv` at its lowest and to `avg_mv` at the lowest of its running
+    // average. Runs until that report has gone out -- the one after boot, the
+    // first time -- and returns what it said.
+    BatteryReport Report(uint16_t rest_mv, uint16_t min_mv, uint16_t avg_mv)
     {
         bspMockSetBatteryMv(rest_mv);
         bspMockSetSagMinMv(min_mv);
+        bspMockSetSagAverageMinMv(avg_mv);
 
         int first = tuyaSdkMockDpCount();
 
@@ -228,12 +236,13 @@ protected:
         {
             n++;
 
-            BatteryReport report = Report(row.rest_mv, row.min_mv);
+            BatteryReport report = Report(row.rest_mv, row.min_mv, row.avg_mv);
 
             EXPECT_EQ(row.percent, report.percent) << "report " << n << ": DP 4";
             EXPECT_EQ(static_cast<int>(row.level), report.level) << "report " << n << ": DP 3";
             EXPECT_EQ(row.damaged ? 1 : 0, report.damaged) << "report " << n << ": DP 102";
             EXPECT_EQ(row.dp101_mv, report.min_mv) << "report " << n << ": DP 101";
+            EXPECT_EQ(row.dp103_mv, report.average_min_mv) << "report " << n << ": DP 103";
         }
     }
 
@@ -447,7 +456,8 @@ TEST_F(TempSensorMainTest, ResetsTheSdkParserOnEveryWindow)
 // The module's transmit bursts pull the cell down for a millisecond or less
 // at a time, and how far is what says whether the cell -- and its holder --
 // can still power a report. The BSP samples it through every window, and the
-// next window carries the lowest it saw (DP 101).
+// next window carries the lowest single reading it saw (DP 101) and the lowest
+// point of its running average (DP 103).
 
 TEST_F(TempSensorMainTest, TheSagMonitorCoversTheWholeWindow)
 {
@@ -487,6 +497,7 @@ TEST_F(TempSensorMainTest, TheFirstWindowAfterBootHasNoMinimumToReport)
     // measured -- and after a reset there are none. Nothing goes out, rather
     // than a 0 mV that would read as a dead cell.
     bspMockSetSagMinMv(960u);
+    bspMockSetSagAverageMinMv(1100u);
     ModuleReachesCloud();
     RunCycles(1);
 
@@ -494,6 +505,7 @@ TEST_F(TempSensorMainTest, TheFirstWindowAfterBootHasNoMinimumToReport)
 
     uint32_t value = 0;
     EXPECT_FALSE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    EXPECT_FALSE(tuyaSdkMockLastDpValue(DPID_BATTERY_AVG_MIN_VOLTAGE, &value));
 }
 
 TEST_F(TempSensorMainTest, EachReportCarriesThePreviousWindowsMinimum)
@@ -519,8 +531,10 @@ TEST_F(TempSensorMainTest, EachReportCarriesThePreviousWindowsMinimum)
 TEST_F(TempSensorMainTest, AReportCarriesTheLowestOfTheFailedWindowsBeforeIt)
 {
     // A window whose sag browned the module out never gets to say so. The
-    // first one after it that does get through has to.
+    // first one after it that does get through has to -- for both minima,
+    // each the lowest of its own kind.
     bspMockSetSagMinMv(1000u);
+    bspMockSetSagAverageMinMv(1200u);
     SettleAt(234);
 
     ModuleBootsButNeverConnects();
@@ -528,17 +542,22 @@ TEST_F(TempSensorMainTest, AReportCarriesTheLowestOfTheFailedWindowsBeforeIt)
     RunCycles(1); // one cycle of median lag
 
     bspMockSetSagMinMv(850u);
+    bspMockSetSagAverageMinMv(1100u);
     ASSERT_EQ(1, WindowsDuring(1)); // fails
     bspMockSetSagMinMv(900u);
+    bspMockSetSagAverageMinMv(1050u);
     ASSERT_EQ(1, WindowsDuring(1)); // its retry fails too
 
     ModuleReachesCloud();
     bspMockSetSagMinMv(990u);
+    bspMockSetSagAverageMinMv(1190u);
     ASSERT_EQ(1, WindowsDuring(1)); // the second retry gets through
 
     uint32_t value = 0;
     ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
     EXPECT_EQ(850u, value);
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_AVG_MIN_VOLTAGE, &value));
+    EXPECT_EQ(1050u, value);
 
     // Delivered, so forgotten: the next report starts again from the window
     // that delivered it.
@@ -547,6 +566,8 @@ TEST_F(TempSensorMainTest, AReportCarriesTheLowestOfTheFailedWindowsBeforeIt)
 
     ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
     EXPECT_EQ(990u, value);
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_AVG_MIN_VOLTAGE, &value));
+    EXPECT_EQ(1190u, value);
 }
 
 TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
@@ -570,6 +591,23 @@ TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
     EXPECT_EQ(999u, value);
 }
 
+TEST_F(TempSensorMainTest, TheAveragedMinimumIsReportedWhateverItsValue)
+{
+    // DP 103 has no threshold: the gauge's will be set from its history, so
+    // every value is worth having -- a healthy cell's most of all.
+    bspMockSetSagMinMv(1100u);
+    bspMockSetSagAverageMinMv(1250u);
+    SettleAt(234);
+
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+
+    uint32_t value = 0;
+    EXPECT_FALSE(tuyaSdkMockLastDpValue(DPID_BATTERY_MIN_VOLTAGE, &value));
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_BATTERY_AVG_MIN_VOLTAGE, &value));
+    EXPECT_EQ(1250u, value);
+}
+
 // --- The battery gauge under load -------------------------------------------
 //
 // How far the windows pull the cell down moves the gauge's 0 % point and says
@@ -578,16 +616,21 @@ TEST_F(TempSensorMainTest, OnlyAMinimumBelowOneVoltIsReported)
 // measured while it reports, so it shows in the row below. And a window only
 // counts once the next one confirms it, so the gauge needs two windows on a
 // cell before it moves. battery_test.cpp has the arithmetic behind each number.
+//
+// The gauge goes by a window's averaged minimum ("avg", DP 103), not its
+// lowest single reading ("min", DP 101). Most tables give a window the same
+// number for both, so the arithmetic in battery_test.cpp applies as it is;
+// ASpikeShowsInDp101ButNotInTheGauge sets them apart.
 
 TEST_F(TempSensorMainTest, TheFailedCellReadsEmptyAndDamagedFromItsThirdReport)
 {
     // The failed Eneloop: 1.29 V at rest, pulled to 0.58 V.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1290,   580,   70,   kHigh,  false,  kNotSent }, // after boot: nothing measured yet
-        { 1290,   580,   70,   kHigh,  false,  580      }, // one window, waiting for a second
-        { 1290,   580,    0,   kLow,   true,   580      },
-        { 1290,   580,    0,   kLow,   true,   580      },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1290,   580,  580,   70,  kHigh,  false,  kNotSent, kNotSent }, // after boot: nothing measured yet
+        { 1290,   580,  580,   70,  kHigh,  false,  580,      580      }, // one window, waiting for a second
+        { 1290,   580,  580,    0,  kLow,   true,   580,      580      },
+        { 1290,   580,  580,    0,  kLow,   true,   580,      580      },
     });
 }
 
@@ -595,33 +638,30 @@ TEST_F(TempSensorMainTest, OneDeepWindowDoesNotMoveTheGauge)
 {
     // The healthy Eneloop, and one window as deep as the failed cell's.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1286,   945,   67,   kHigh,  false,  kNotSent }, // after boot: the plain curve
-        { 1286,   945,   67,   kHigh,  false,  945      }, // one window: still the plain curve
-        { 1286,   580,   63,   kHigh,  false,  945      }, // the deep window
-        { 1286,   945,   63,   kHigh,  false,  580      }, // it shows in DP 101 only
-        { 1286,   945,   63,   kHigh,  false,  945      },
-        { 1286,   945,   63,   kHigh,  false,  945      },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1286,   945,  945,   67,  kHigh,  false,  kNotSent, kNotSent }, // after boot: the plain curve
+        { 1286,   945,  945,   67,  kHigh,  false,  945,      945      }, // one window: still the plain curve
+        { 1286,   580,  580,   63,  kHigh,  false,  945,      945      }, // the deep window
+        { 1286,   945,  945,   63,  kHigh,  false,  580,      580      }, // it shows in DP 101 and 103 only
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
     });
 }
 
-TEST_F(TempSensorMainTest, TheRunOf2026_11_05)
+TEST_F(TempSensorMainTest, ASpikeShowsInDp101ButNotInTheGauge)
 {
-    // notes/Second battery attempt.txt: a charged Eneloop at 1.35 V, whose
-    // first window -- likely while it was still being seated -- went to
-    // 389 mV, below half. Taken whole, that window read 0 % and damaged from
-    // the second report. Now it waits for a second window and is outvoted.
-    //
-    // The windows after it went to ~860 mV, and those read 0 % and damaged on
-    // their own: by the model this cell sags nearly as far as the failed one
-    // (todo.md, "Gauge under load"). The resting voltages after the first are
-    // assumed; no DP reports them.
+    // The brand-new cell on the scope (2026-11-06): one narrow spike to
+    // 0.49 V at the start of the radio's activity, then transmit bursts to
+    // ~0.8 V on every other pair, which average out at ~1.01 V
+    // (battery_test.cpp, TheSagMonitorsSamples). By its lowest single reading
+    // the cell would read 0 % and damaged from the third report; by the
+    // average it reads full.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1350,   389,  100,   kHigh,  false,  kNotSent }, // 07:32, after the swap
-        { 1335,   864,  100,   kHigh,  false,  389      }, // 09:33: was 0 %, damaged
-        { 1330,   858,    0,   kLow,   true,   864      }, // 13:15
-        { 1325,   860,    0,   kLow,   true,   858      }, // 15:20
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1336,   491, 1011,  100,  kHigh,  false,  kNotSent, kNotSent },
+        { 1336,   491, 1011,  100,  kHigh,  false,  491,      1011     },
+        { 1336,   491, 1011,  100,  kHigh,  false,  491,      1011     }, // collapse 1147 mV: healthy
+        { 1336,   491, 1011,  100,  kHigh,  false,  491,      1011     },
     });
 }
 
@@ -629,16 +669,16 @@ TEST_F(TempSensorMainTest, ACellSwappedWithoutAResetStartsOver)
 {
     // The 3.3 V rail's capacitors can carry the sleeping MCU through a quick
     // swap, so nothing in RAM is cleared. The jump in resting voltage is what
-    // says the cell changed, and the old cell's sag and DP 101 minimum go with
-    // it.
+    // says the cell changed, and the old cell's sag and DP 101 and 103 minima
+    // go with it.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1290,   580,   70,   kHigh,  false,  kNotSent }, // the failed Eneloop
-        { 1290,   580,   70,   kHigh,  false,  580      },
-        { 1290,   580,    0,   kLow,   true,   580      },
-        { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // a cell off the charger
-        { 1400,  1100,  100,   kHigh,  false,  kNotSent }, // its 1.10 V is above DP 101's 1 V
-        { 1400,  1100,  100,   kHigh,  false,  kNotSent },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1290,   580,  580,   70,  kHigh,  false,  kNotSent, kNotSent }, // the failed Eneloop
+        { 1290,   580,  580,   70,  kHigh,  false,  580,      580      },
+        { 1290,   580,  580,    0,  kLow,   true,   580,      580      },
+        { 1400,  1100, 1100,  100,  kHigh,  false,  kNotSent, kNotSent }, // a cell off the charger
+        { 1400,  1100, 1100,  100,  kHigh,  false,  kNotSent, 1100     }, // DP 101 only below 1 V; DP 103 always
+        { 1400,  1100, 1100,  100,  kHigh,  false,  kNotSent, 1100     },
     });
 }
 
@@ -646,11 +686,11 @@ TEST_F(TempSensorMainTest, ARisingCellIsNotTakenForANewOne)
 {
     // A cell recovering a little -- 40 mV here -- keeps its trend.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1290,   580,   70,   kHigh,  false,  kNotSent },
-        { 1290,   580,   70,   kHigh,  false,  580      },
-        { 1290,   580,    0,   kLow,   true,   580      },
-        { 1330,   580,    0,   kLow,   true,   580      },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1290,   580,  580,   70,  kHigh,  false,  kNotSent, kNotSent },
+        { 1290,   580,  580,   70,  kHigh,  false,  580,      580      },
+        { 1290,   580,  580,    0,  kLow,   true,   580,      580      },
+        { 1330,   580,  580,    0,  kLow,   true,   580,      580      },
     });
 }
 
@@ -662,6 +702,7 @@ TEST_F(TempSensorMainTest, WindowsThatNeverReachedTheCloudStillCount)
     // empty and damaged.
     bspMockSetBatteryMv(1290u);
     bspMockSetSagMinMv(580u);
+    bspMockSetSagAverageMinMv(580u);
     ModuleBootsButNeverConnects();
     ASSERT_EQ(1, WindowsDuring(1)); // the report after boot, lost
     ASSERT_EQ(1, WindowsDuring(1)); // its retry, five minutes later, lost too
@@ -676,6 +717,7 @@ TEST_F(TempSensorMainTest, WindowsThatNeverReachedTheCloudStillCount)
     EXPECT_EQ(static_cast<int>(kLow), report.level);
     EXPECT_EQ(1, report.damaged);
     EXPECT_EQ(580, report.min_mv);
+    EXPECT_EQ(580, report.average_min_mv);
 }
 
 TEST_F(TempSensorMainTest, AFailedRestingReadReadsFlatButKeepsTheTrend)
@@ -684,13 +726,13 @@ TEST_F(TempSensorMainTest, AFailedRestingReadReadsFlatButKeepsTheTrend)
     // report reads 0 % -- the direction that cannot mislead -- but it is not
     // taken for a new cell, and its window adds nothing to the trend.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1286,   945,   67,   kHigh,  false,  kNotSent },
-        { 1286,   945,   67,   kHigh,  false,  945      },
-        { 1286,   945,   63,   kHigh,  false,  945      },
-        {    0,   945,    0,   kLow,   false,  945      }, // the read fails
-        { 1286,   945,   63,   kHigh,  false,  945      }, // 63, not 67: the trend held
-        { 1286,   945,   63,   kHigh,  false,  945      },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1286,   945,  945,   67,  kHigh,  false,  kNotSent, kNotSent },
+        { 1286,   945,  945,   67,  kHigh,  false,  945,      945      },
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
+        {    0,   945,  945,    0,  kLow,   false,  945,      945      }, // the read fails
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      }, // 63, not 67: the trend held
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
     });
 }
 
@@ -701,14 +743,14 @@ TEST_F(TempSensorMainTest, ABadReferenceReadDoesNotMarkTheCellDamaged)
     // not as the first window of one: that would read 0 % and damaged for
     // weeks.
     ExpectReports({
-        // rest   min   gauge  level   DP 102  DP 101
-        { 1286,   945,   67,   kHigh,  false,  kNotSent },
-        { 1286,   945,   67,   kHigh,  false,  945      },
-        { 1286,   945,   63,   kHigh,  false,  945      },
-        { 4000,   945,  100,   kHigh,  false,  kNotSent }, // the bad read
-        { 1286,   945,   67,   kHigh,  false,  945      }, // starting over: the plain curve
-        { 1286,   945,   67,   kHigh,  false,  945      }, // one window on the "new" cell
-        { 1286,   945,   63,   kHigh,  false,  945      },
+        // rest   min   avg  gauge  level   DP 102  DP 101    DP 103
+        { 1286,   945,  945,   67,  kHigh,  false,  kNotSent, kNotSent },
+        { 1286,   945,  945,   67,  kHigh,  false,  945,      945      },
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
+        { 4000,   945,  945,  100,  kHigh,  false,  kNotSent, kNotSent }, // the bad read
+        { 1286,   945,  945,   67,  kHigh,  false,  945,      945      }, // starting over: the plain curve
+        { 1286,   945,  945,   67,  kHigh,  false,  945,      945      }, // one window on the "new" cell
+        { 1286,   945,  945,   63,  kHigh,  false,  945,      945      },
     });
 }
 

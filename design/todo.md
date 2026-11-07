@@ -339,25 +339,36 @@ the next report carries. The scope showed 0.96 V on the office Eneloop at 1.30 V
 
 The battery percentage now moves its 0 % point up to just above the cell's collapse
 voltage, and DP 102 flags a cell that sags far more than a healthy one (firmware_design.md
-section 5). First add the DP on the Tuya platform: ID 102, identifier battery_damaged, Bool,
-report only.
+section 5). First add the DPs on the Tuya platform:
+- ID 102, identifier battery_damaged, Bool, report only.
+- ID 103, identifier battery_avg_min_voltage, Value, report only, 0..3300, step 1, scale 0,
+  unit mV.
+
+**Calibrate from DP 103 first.** Since 2026-11-06 the gauge goes by the averaged minimum
+(DP 103), not the lowest single reading (DP 101). Every threshold was set from the single
+reading: 1210 mV damaged, the 50 mV margin, and the healthy reference of 945 mV. On the
+scope, a brand-new cell's single reading sagged further than the failed cell's (a 0.49 V
+spike, with bursts to ~0.8 V; 0.40 V on a brand-new Duracell). So:
+- Collect a few days of DP 101 and DP 103 side by side on a brand-new or known-good cell,
+  and on the failed Eneloop if it is still around.
+- Set DAMAGED_COLLAPSE_MV and COLLAPSE_MARGIN_MV from where the cells fall on DP 103. If
+  they don't separate, drop DP 102.
+- If the brand-new cell's DP 103 still reads damaged, the averaging time is too short for
+  the bursts (SAG_AVERAGE_SHIFT), or the supply path really is that bad. In that case,
+  measure the holder (below). This already happened once: at 1/8 (~1.4 ms), a brand-new
+  Duracell read 470-750 mV and damaged from its second report, so the weight is now 1/128
+  (~22 ms). The 470 mV readings fit a dip ~2-3 ms long at 0.40 V, not the ~1 ms seen on the
+  scope; if the next DP 103 values are still low, check how long that dip really lasts.
 
 Then check, one report late each time:
-- **Healthy office Eneloop:** about 63 % at 1.286 V, DP 102 false.
+- **Healthy office Eneloop:** about 63 % at 1.286 V, DP 102 false. This assumed 945 mV
+  and is to be redone with DP 103.
 - **The failed Eneloop on the office board:** 0 % and Low from the third report after it
   goes in, DP 102 true. A window counts only once the next one confirms it.
-- **The Eneloop from 2026-11-05** (notes/Second battery attempt.txt): after a deep first
-  window, which the pairing now ignores, it went to ~860 mV at ~1.33 V. That reads 0 % and
-  damaged by itself, about as weak as the failed cell. Find out if it is:
-  - Which cell is it? If it's the office Eneloop that went to 945 mV at 1.286 V in October,
-    the change is more likely in the holder than the cell. Re-seat it and read the next
-    DP 101.
-  - On the scope, at the cell and at the board's input: is the minimum the module's
-    power-on inrush or a transmit burst, and how much does the holder add? The model
-    assumes constant power, and inrush isn't. If inrush sets the minimum, start the sag
-    monitor a few ms after power-on.
-  - Let it run. If the model is right, it stops reporting at about 1.23–1.30 V at rest. If
-    it keeps reporting below that, the model reads its sag too high.
+- **The supply path:** on 2026-11-06 a brand-new cell dipped as far as the failed one. With
+  the scope on the cell's own ends (C1) and on the board's input (C2) through one window,
+  the gap between them during the bursts is the holder and its leads. Also find out what
+  changed on the office board since October, when the same board read 0.96 V.
 - **The failed Eneloop recharged:** DP 102 should still be true if its resistance stays
   high, even though its DP 101 looks like a healthy cell's. If it reads false, its
   resistance was high only because it was nearly flat.

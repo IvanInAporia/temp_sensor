@@ -21,6 +21,7 @@
 
 #include "bsp.h"
 
+#include "battery.h"
 #include "main.h"
 #include "stm32l0xx_ll_adc.h"
 
@@ -113,13 +114,16 @@ static const uint32_t kAdcChannels[] = {
 
 #define ADC_CHANNEL_COUNT (sizeof(kAdcChannels) / sizeof(kAdcChannels[0]))
 
-/* The sag monitor's lowest sample so far, kept as the raw pair it came from
- * rather than as millivolts: the interrupt only has to compare, and the one
- * conversion to millivolts happens in BSP_Battery_StopSagMonitor. Written by
- * ADC1_IRQHandler, read only once its interrupt is off. sag_vrefint_raw is 0
- * until the first pair completes. */
-static volatile uint16_t sag_cell_raw;
-static volatile uint16_t sag_vrefint_raw;
+/* The sag monitor's samples so far, kept as raw pairs rather than millivolts:
+ * the interrupt only has to compare and average, and the conversion to
+ * millivolts happens once, in BSP_Battery_StopSagMonitor.
+ *
+ * Written only by ADC1_IRQHandler while the monitor runs, and touched from
+ * thread context only while its interrupt is off. Not volatile, because it is
+ * handed to battery.c by pointer: the barriers in BSP_Battery_StartSagMonitor
+ * and in the NVIC disable keep the compiler from moving an access across the
+ * interrupt being turned on or off. */
+static Battery_SagSamples sag_samples;
 
 /* The cell half of the pair in progress. */
 static volatile uint16_t sag_pair_cell_raw;
@@ -671,7 +675,8 @@ uint16_t BSP_Battery_ReadMv(void)
  * On the scope the cell's minimum during a window is a short dip on each
  * transmit burst, so a reading taken from thread context would almost always
  * land between them. Instead the converter runs continuously for the whole
- * window and its end-of-conversion interrupt keeps the lowest result.
+ * window, and its end-of-conversion interrupt keeps the lowest pair and the
+ * lowest point of a ~22 ms running average (Battery_SagSamples, battery.h).
  *
  * Every sample is a pair, the cell and then VREFINT, back to back in one scan,
  * and the pair is what makes it a voltage. MeasureVddaMv's single VDDA reading
@@ -714,18 +719,10 @@ void ADC1_IRQHandler(void)
 
   hadc.Instance->ISR = ADC_ISR_EOS;
 
-  /* VREFINT closes the pair. The cell voltage goes as cell / VREFINT, so the
-     lower pair is the one with the smaller ratio -- compared cross-multiplied,
-     because the M0+ has no divider and two 10-bit counts multiply well inside
-     32 bits. A VREFINT of 0 is not a reading and is skipped. */
-  uint32_t cell = sag_pair_cell_raw;
-
-  if ((raw != 0u) &&
-      ((sag_vrefint_raw == 0u) || ((cell * sag_vrefint_raw) < ((uint32_t) sag_cell_raw * raw))))
-  {
-    sag_cell_raw    = (uint16_t) cell;
-    sag_vrefint_raw = raw;
-  }
+  /* VREFINT closes the pair. Keeping the lowest pair and the running average
+     is battery.c's arithmetic: a handful of shifts, adds and multiplies, well
+     inside the ~171 us before the next pair. */
+  Battery_SagSamplesAdd(&sag_samples, sag_pair_cell_raw, raw);
 }
 
 /* Put back everything BSP_Battery_StartSagMonitor changed, the interrupt
@@ -768,9 +765,8 @@ void BSP_Battery_StartSagMonitor(void)
      undone by the same halt that ends a run. */
   sag_running             = true;
   sag_saved_sampling_time = READ_BIT(hadc.Instance->SMPR, ADC_SMPR_SMPR);
-  sag_cell_raw            = 0u;
-  sag_vrefint_raw         = 0u;
   sag_pair_cell_raw       = 0u;
+  Battery_SagSamplesReset(&sag_samples);
 
   /* Already up from this cycle's BSP_Battery_ReadMv, so this returns at once.
      It stays up for the whole window: only BSP_McuSleep takes it down. */
@@ -802,6 +798,10 @@ void BSP_Battery_StartSagMonitor(void)
   __HAL_ADC_ENABLE_IT(&hadc, ADC_IT_EOC);
   HAL_NVIC_SetPriority(ADC1_IRQn, SAG_MONITOR_IRQ_PRIORITY, 0);
   HAL_NVIC_ClearPendingIRQ(ADC1_IRQn);
+
+  /* A compiler barrier as well: the samples were reset above through plain,
+     non-volatile stores, and the NVIC enable has no barrier of its own. */
+  __DSB();
   HAL_NVIC_EnableIRQ(ADC1_IRQn);
 
   if (HAL_ADC_Start(&hadc) != HAL_OK)
@@ -810,28 +810,37 @@ void BSP_Battery_StartSagMonitor(void)
   }
 }
 
-uint16_t BSP_Battery_StopSagMonitor(void)
+/* A raw pair to millivolts, or 0 for no pair. */
+static uint16_t SagPairToMv(Battery_AdcPair pair)
+{
+  if (pair.vrefint == 0u)
+  {
+    return 0u;
+  }
+
+  uint32_t vdda_mv = __LL_ADC_CALC_VREFANALOG_VOLTAGE(pair.vrefint, ADC_RESOLUTION_LL);
+
+  return (uint16_t) __LL_ADC_CALC_DATA_TO_VOLTAGE(vdda_mv, pair.cell, ADC_RESOLUTION_LL);
+}
+
+BSP_SagReading BSP_Battery_StopSagMonitor(void)
 {
   if (sag_running)
   {
     SagMonitorHalt();
   }
 
-  /* The interrupt is off, so the pair can no longer change under us. */
-  uint32_t cell_raw    = sag_cell_raw;
-  uint32_t vrefint_raw = sag_vrefint_raw;
+  /* The interrupt is off -- the halt's NVIC disable is also a compiler
+     barrier -- so the samples can no longer change under us. */
+  BSP_SagReading reading = {
+    SagPairToMv(Battery_SagSamplesLowest(&sag_samples)),
+    SagPairToMv(Battery_SagSamplesLowestAverage(&sag_samples)),
+  };
 
   /* Taken: a second stop reports nothing rather than this run again. */
-  sag_vrefint_raw = 0u;
+  Battery_SagSamplesReset(&sag_samples);
 
-  if (vrefint_raw == 0u)
-  {
-    return 0u;
-  }
-
-  uint32_t vdda_mv = __LL_ADC_CALC_VREFANALOG_VOLTAGE(vrefint_raw, ADC_RESOLUTION_LL);
-
-  return (uint16_t) __LL_ADC_CALC_DATA_TO_VOLTAGE(vdda_mv, cell_raw, ADC_RESOLUTION_LL);
+  return reading;
 }
 
 /* --- Spare I/O ------------------------------------------------------------ */

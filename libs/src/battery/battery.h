@@ -5,7 +5,8 @@
 // Pure functions over millivolt readings, so the curve is something the host
 // tests can pin down rather than something only a bench discharge can check.
 // Taking the readings is the BSP's job (BSP_Battery_ReadMv for the cell at
-// rest, BSP_Battery_StopSagMonitor for its lowest under load).
+// rest, BSP_Battery_StopSagMonitor for its lowest under load). Only the
+// arithmetic of the sag monitor's samples is here, so the tests can reach it.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,6 +46,58 @@ Battery_State Battery_StateFromPercent(uint8_t percent);
  * resistance collapses under it. How far a window pulls the cell down says
  * where that happens. See battery.c for the derivation.
  */
+
+/* --- The sag monitor's samples -----------------------------------------------
+ *
+ * The sag monitor (BSP_Battery_StartSagMonitor) samples the cell from an
+ * interrupt, as raw ADC pairs: the cell, then VREFINT right after it. The cell
+ * voltage goes as cell / vrefint, so pairs are compared by that ratio and a
+ * 3.3 V rail that sags with the cell cannot read it high. The arithmetic is
+ * here rather than in the BSP so the host tests can pin it down.
+ *
+ * Two things are kept over a window:
+ *
+ *  - The lowest single pair (DP 101). On the scope this is one dip per
+ *    window, about a millisecond long, to 0.4-0.5 V even on brand-new cells.
+ *    The module rides it out.
+ *  - The lowest point of a running average, where each pair counts for 1/128
+ *    (DP 103, and what the gauge uses). At the monitor's pair every ~171 us
+ *    that averages over ~22 ms: long against that dip, which moves it ~1/20
+ *    of the way, and short against the module's busy time, so a cell that
+ *    sags for a tenth of a second or more shows in full.
+ */
+
+/* One raw pair. vrefint 0 means none. */
+typedef struct {
+    uint16_t cell;
+    uint16_t vrefint;
+} Battery_AdcPair;
+
+/* A running average of pairs, in 1/128ths of a count, so none of a pair's
+ * weight is lost to rounding. vrefint 0 means none. */
+typedef struct {
+    uint32_t cell;
+    uint32_t vrefint;
+} Battery_AdcAverage;
+
+/* What one window's samples came to so far. */
+typedef struct {
+    Battery_AdcPair    lowest;
+    Battery_AdcAverage average;
+    Battery_AdcAverage lowest_average;
+} Battery_SagSamples;
+
+void Battery_SagSamplesReset(Battery_SagSamples* samples);
+
+/* One pair from the ADC, 10-bit counts. A pair whose VREFINT reads 0 is not a
+ * reading, and is skipped. The first pair of a window starts the average, so
+ * no window opens with a dip from 0. */
+void Battery_SagSamplesAdd(Battery_SagSamples* samples, uint16_t cell_raw, uint16_t vrefint_raw);
+
+/* The lowest single pair, and the lowest point of the average rounded back to
+ * counts. Both {0, 0} until a pair has been added. */
+Battery_AdcPair Battery_SagSamplesLowest(const Battery_SagSamples* samples);
+Battery_AdcPair Battery_SagSamplesLowestAverage(const Battery_SagSamples* samples);
 
 /* The resting voltage, in mV, below which this cell on this board could no
  * longer power a transmit burst -- its collapse voltage -- from one window:

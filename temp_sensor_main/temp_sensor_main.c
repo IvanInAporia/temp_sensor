@@ -137,14 +137,17 @@ static uint32_t report_hold_until_ms;
 static bool module_unpaired;
 
 /* The lowest the module's load pulled the cell to, in mV, over the windows
- * since the last one that reached the cloud -- or 0 if none was measured. The
- * next window carries it out (DP 101), so a report says how the windows before
- * it went, failed ones included. A window whose sag browned the module out is
- * the one most worth knowing about, and the one that could not say so itself.
+ * since the last one that reached the cloud -- or 0 if none was measured: the
+ * lowest single reading (DP 101) and the lowest point of the running average
+ * (DP 103). The next window carries them out, so a report says how the windows
+ * before it went, failed ones included. A window whose sag browned the module
+ * out is the one most worth knowing about, and the one that could not say so
+ * itself.
  *
- * In RAM, like the backoff. A battery swap resets it, which is right: it
- * belongs to the cell it was measured on. */
+ * In RAM, like the backoff. A battery swap resets them, which is right: they
+ * belong to the cell they were measured on. */
 static uint16_t battery_min_mv;
+static uint16_t battery_average_min_mv;
 
 /* The cell's collapse voltage, estimated over its windows (battery.h). It moves
  * the battery percentage's 0 % point and says whether the cell is damaged.
@@ -178,8 +181,9 @@ void TempSensorInit(void)
     report_retries_left  = REPORT_RETRIES;
     report_hold_until_ms = next_cycle_ms;
     module_unpaired      = false;
-    battery_min_mv       = 0u;
-    previous_rest_mv     = 0u;
+    battery_min_mv         = 0u;
+    battery_average_min_mv = 0u;
+    previous_rest_mv       = 0u;
     Battery_SagTrendReset(&sag_trend);
 }
 
@@ -210,7 +214,8 @@ void TempSensorRunCycle(void)
         /* What was measured belongs to the cell that came out. A false alarm
          * costs little: the next two windows measure this cell afresh. */
         Battery_SagTrendReset(&sag_trend);
-        battery_min_mv = 0u;
+        battery_min_mv         = 0u;
+        battery_average_min_mv = 0u;
     }
 
     if (battery_mv != 0u)
@@ -346,7 +351,7 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint1
 
     /* The windows before this one: its own minimum is still to be measured.
      * Cached now, with the module still unpowered, like the readings. */
-    Tuya_SetBatteryMinMv(battery_min_mv);
+    Tuya_SetBatteryMinMv(battery_min_mv, battery_average_min_mv);
 
     /* Before the supply, so the module's inrush counts too. */
     BSP_Battery_StartSagMonitor();
@@ -408,22 +413,28 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint1
 
     /* After the supply, so the monitor covered all of it. Never left running:
      * its interrupt fires every ~170 us. */
-    uint16_t window_min_mv = BSP_Battery_StopSagMonitor();
+    BSP_SagReading sag = BSP_Battery_StopSagMonitor();
 
     /* Every window counts, failed ones included: a cell whose sag browns the
      * module out does it window after window, and that is the strongest
-     * evidence there is. A lone one is screened out by the trend. */
-    Battery_SagTrendAdd(&sag_trend, Battery_CollapseMv(rest_mv, window_min_mv));
+     * evidence there is. A lone one is screened out by the trend.
+     *
+     * The averaged minimum, not the single lowest reading: a brand-new cell
+     * shows one narrow spike to ~0.5 V at the start of the radio's activity,
+     * which the 3.3 V rail's capacitors carry the module through. */
+    Battery_SagTrendAdd(&sag_trend, Battery_CollapseMv(rest_mv, sag.average_min_mv));
 
     if (reached_cloud)
     {
         /* What was cached has gone out, so the next report starts from this
          * window alone. */
-        battery_min_mv = window_min_mv;
+        battery_min_mv         = sag.min_mv;
+        battery_average_min_mv = sag.average_min_mv;
     }
     else
     {
-        battery_min_mv = LowerMv(battery_min_mv, window_min_mv);
+        battery_min_mv         = LowerMv(battery_min_mv, sag.min_mv);
+        battery_average_min_mv = LowerMv(battery_average_min_mv, sag.average_min_mv);
     }
 
     return reached_cloud;

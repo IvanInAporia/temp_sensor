@@ -76,9 +76,12 @@ uint32_t bspMockBatteryLastReadMs(void);
 int      bspMockBatteryReadCalls(void);
 
 /* What BSP_Battery_StopSagMonitor returns for a monitor that was running: the
- * lowest the cell went during the window. 0 is the device's "saw nothing".
+ * lowest single reading of the window (DP 101), and the lowest point of its
+ * running average (DP 103, and what the gauge uses). 0 is the device's "saw
+ * nothing", and both start at 0.
  */
 void bspMockSetSagMinMv(uint16_t mv);
+void bspMockSetSagAverageMinMv(uint16_t mv);
 
 bool bspMockSagMonitorRunning(void);
 

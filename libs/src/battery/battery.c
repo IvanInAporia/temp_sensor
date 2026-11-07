@@ -160,6 +160,116 @@ Battery_State Battery_StateFromPercent(uint8_t percent)
  * 16-bit quarter-millivolts. */
 #define CELL_MAX_MV 2000u
 
+/* Each pair counts for 1 / (1 << SAG_AVERAGE_SHIFT) of the running average:
+ * 1/128, so ~22 ms at a pair every ~171 us. To be set from the DP 103 history.
+ *
+ * It was 1/8 (~1.4 ms) at first. A brand-new cell then read 470-750 mV, as
+ * the window's one deep dip -- 0.40 V for about a millisecond -- pulled the
+ * average half way down to it. The module rides that dip out, so it says
+ * nothing about whether the cell can power a report. Against ~22 ms, a 1 ms
+ * dip moves the average only ~1/20 of the way, while a sag that lasts a tenth
+ * of a second still shows in full. */
+#define SAG_AVERAGE_SHIFT 7u
+
+/* The averages are compared in 16ths of a count -- at most 16 x 1023 -- so the
+ * cross products stay inside 32 bits whatever the shift. A 16th of a count is
+ * ~0.2 mV of cell. */
+#define SAG_COMPARE_SHIFT ((SAG_AVERAGE_SHIFT > 4u) ? (SAG_AVERAGE_SHIFT - 4u) : 0u)
+
+/* Whether pair a reads a lower cell voltage than pair b: cell / vrefint,
+ * compared cross-multiplied, because the M0+ has no divider. */
+static bool PairIsLower(Battery_AdcPair a, Battery_AdcPair b)
+{
+    return ((uint32_t) a.cell * b.vrefint) < ((uint32_t) b.cell * a.vrefint);
+}
+
+/* The same for two averages. */
+static bool AverageIsLower(Battery_AdcAverage a, Battery_AdcAverage b)
+{
+    return ((a.cell >> SAG_COMPARE_SHIFT) * (b.vrefint >> SAG_COMPARE_SHIFT))
+         < ((b.cell >> SAG_COMPARE_SHIFT) * (a.vrefint >> SAG_COMPARE_SHIFT));
+}
+
+/* A running average back to whole counts, rounded. */
+static uint16_t ToCounts(uint32_t average)
+{
+    return (uint16_t)((average + (1u << (SAG_AVERAGE_SHIFT - 1u))) >> SAG_AVERAGE_SHIFT);
+}
+
+/* One step of a running average: a weight of 1 / (1 << SAG_AVERAGE_SHIFT)
+ * for the new count. Rounded, not truncated, so a steady input settles on
+ * itself instead of half a count off -- which would be a bias in one
+ * direction only. */
+static uint32_t AverageStep(uint32_t average, uint16_t raw)
+{
+    return average - ToCounts(average) + raw;
+}
+
+void Battery_SagSamplesReset(Battery_SagSamples* samples)
+{
+    /* Field by field here and below: whole-struct copies of these pairs made
+     * the firmware link in memcpy. */
+    samples->lowest.cell            = 0u;
+    samples->lowest.vrefint         = 0u;
+    samples->average.cell           = 0u;
+    samples->average.vrefint        = 0u;
+    samples->lowest_average.cell    = 0u;
+    samples->lowest_average.vrefint = 0u;
+}
+
+void Battery_SagSamplesAdd(Battery_SagSamples* samples, uint16_t cell_raw, uint16_t vrefint_raw)
+{
+    if (vrefint_raw == 0u)
+    {
+        return;
+    }
+
+    Battery_AdcPair pair = { cell_raw, vrefint_raw };
+
+    if ((samples->lowest.vrefint == 0u) || PairIsLower(pair, samples->lowest))
+    {
+        samples->lowest.cell    = cell_raw;
+        samples->lowest.vrefint = vrefint_raw;
+    }
+
+    if (samples->average.vrefint == 0u)
+    {
+        /* The window's first pair: the average starts there, rather than
+         * climbing from 0 through a dip that never happened. */
+        samples->average.cell    = (uint32_t) cell_raw << SAG_AVERAGE_SHIFT;
+        samples->average.vrefint = (uint32_t) vrefint_raw << SAG_AVERAGE_SHIFT;
+    }
+    else
+    {
+        /* Cell and VREFINT averaged apart, then taken as a ratio. While the
+         * 3.3 V rail holds, VREFINT barely moves and this is the average of
+         * the cell; when the rail sags, both counts rise together. */
+        samples->average.cell    = AverageStep(samples->average.cell, cell_raw);
+        samples->average.vrefint = AverageStep(samples->average.vrefint, vrefint_raw);
+    }
+
+    if ((samples->lowest_average.vrefint == 0u) || AverageIsLower(samples->average, samples->lowest_average))
+    {
+        samples->lowest_average.cell    = samples->average.cell;
+        samples->lowest_average.vrefint = samples->average.vrefint;
+    }
+}
+
+Battery_AdcPair Battery_SagSamplesLowest(const Battery_SagSamples* samples)
+{
+    return samples->lowest;
+}
+
+Battery_AdcPair Battery_SagSamplesLowestAverage(const Battery_SagSamples* samples)
+{
+    Battery_AdcPair pair = {
+        ToCounts(samples->lowest_average.cell),
+        ToCounts(samples->lowest_average.vrefint),
+    };
+
+    return pair;
+}
+
 uint16_t Battery_CollapseMv(uint16_t rest_mv, uint16_t min_mv)
 {
     /* No sag seen, or nothing to measure it against -- a 0 from either reading

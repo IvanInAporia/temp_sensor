@@ -222,10 +222,23 @@ uint16_t BSP_Battery_ReadMv(void);
  */
 void BSP_Battery_StartSagMonitor(void);
 
-/* Stop the monitor and return the lowest cell voltage it saw, in millivolts,
- * or 0 if it saw none. Safe to call on a monitor that is not running.
+/* What the monitor saw over a window, in millivolts, each 0 if it saw nothing.
  */
-uint16_t BSP_Battery_StopSagMonitor(void);
+typedef struct {
+    /* The lowest single reading. Often one narrow spike, which the 3.3 V
+     * rail's capacitors carry the module through. */
+    uint16_t min_mv;
+
+    /* The lowest point of a running average over about a millisecond: how far
+     * the transmit bursts pull the cell for long enough to matter. See
+     * Battery_SagSamples in battery.h. */
+    uint16_t average_min_mv;
+} BSP_SagReading;
+
+/* Stop the monitor and return what it saw. Safe to call on a monitor that is
+ * not running: that returns zeroes.
+ */
+BSP_SagReading BSP_Battery_StopSagMonitor(void);
 
 /* --- Spare I/O --------------------------------------------------------------
  *

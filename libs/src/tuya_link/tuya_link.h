@@ -117,15 +117,21 @@ void Tuya_SetDps(int16_t temp_c10,
                  Battery_State battery_state,
                  bool battery_damaged);
 
-/* Cache the lowest cell voltage under load, in millivolts, for DP 101. Does
- * not transmit. 0 means nothing has been measured, and reports nothing; so
- * does anything at 1000 mV or above, where the sag does not matter yet.
+/* Cache the cell's lowest voltage under load, in millivolts. Does not
+ * transmit.
  *
- * Apart from the reading set above because it is a measurement of report
- * windows, not of the room: it has its own "nothing yet", and goes out with or
- * without a reading. Like Tuya_SetDps, call it only with the module unpowered.
+ *  - min_mv, the lowest single reading, is DP 101. It goes out only below
+ *    1000 mV, where the sag starts to matter.
+ *  - average_min_mv, the lowest point of the running average, is DP 103. It
+ *    goes out whatever its value, while the history it builds is what the
+ *    gauge's thresholds will be set from.
+ *
+ * 0 means nothing has been measured, and reports nothing. Apart from the
+ * reading set above because it is a measurement of report windows, not of the
+ * room: it has its own "nothing yet", and goes out with or without a reading.
+ * Like Tuya_SetDps, call it only with the module unpowered.
  */
-void Tuya_SetBatteryMinMv(uint16_t mv);
+void Tuya_SetBatteryMinMv(uint16_t min_mv, uint16_t average_min_mv);
 
 /* Push the cached readings to the module.
  *
@@ -134,6 +140,6 @@ void Tuya_SetBatteryMinMv(uint16_t mv);
  * everything. Sends no readings until Tuya_SetDps() has supplied a set, so a
  * query arriving before the first measurement reports nothing rather than
  * zeroes -- and, the same way, no DP 101 while its value is 0 or 1000 mV and
- * above.
+ * above, and no DP 103 while its value is 0.
  */
 void Tuya_ReportCachedDps(void);

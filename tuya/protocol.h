@@ -388,6 +388,12 @@ May need to appropriately increase send and receive buffer sizes.
    load than a healthy one (Battery_IsDamaged, battery.c). */
 //Battery probably old or damaged(Only report)
 #define DPID_BATTERY_DAMAGED 102
+/* PORTED: added by hand, like 101.  Platform DP: ID 103, identifier
+   battery_avg_min_voltage, Value, report only, 0..3300, step 1, scale 0,
+   unit mV.  Like 101, but the lowest point of a ~22 ms running average
+   rather than the lowest single reading (Battery_SagSamples, battery.c). */
+//Lowest averaged battery voltage under load(Only report)
+#define DPID_BATTERY_AVG_MIN_VOLTAGE 103
 
 #endif
 

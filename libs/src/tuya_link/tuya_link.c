@@ -21,10 +21,12 @@ static struct {
     bool          valid;
 } dps;
 
-/* DP 101, or 0 for nothing to report. Its own variable rather than part of the
- * set above, because it has its own source and its own "nothing yet" -- see
- * Tuya_SetBatteryMinMv. Written between windows only, like the set. */
+/* DP 101 and DP 103, or 0 for nothing to report. Their own variables rather
+ * than part of the set above, because they have their own source and their
+ * own "nothing yet" -- see Tuya_SetBatteryMinMv. Written between windows
+ * only, like the set. */
 static uint16_t battery_min_mv;
+static uint16_t battery_average_min_mv;
 
 /* DP 101 goes out only below this. Above it the boost still has plenty of
  * margin, and the DP would only add noise to the app's history. */
@@ -63,8 +65,9 @@ static void OnRxError(void)
 
 void Tuya_Init(void)
 {
-    dps.valid      = false;
-    battery_min_mv = 0u;
+    dps.valid              = false;
+    battery_min_mv         = 0u;
+    battery_average_min_mv = 0u;
 
     BSP_Wifi_SetRxErrorCallback(OnRxError);
 
@@ -190,18 +193,26 @@ void Tuya_SetDps(int16_t temp_c10,
     dps.valid           = true;
 }
 
-void Tuya_SetBatteryMinMv(uint16_t mv)
+void Tuya_SetBatteryMinMv(uint16_t min_mv, uint16_t average_min_mv)
 {
     /* Same rule as Tuya_SetDps: only between windows. */
-    battery_min_mv = mv;
+    battery_min_mv         = min_mv;
+    battery_average_min_mv = average_min_mv;
 }
 
 void Tuya_ReportCachedDps(void)
 {
-    /* First, because it does not depend on the reading set below. */
+    /* First, because they do not depend on the reading set below. */
     if ((battery_min_mv != 0u) && (battery_min_mv < BATTERY_MIN_REPORT_BELOW_MV))
     {
         (void) mcu_dp_value_update(DPID_BATTERY_MIN_VOLTAGE, (u32) battery_min_mv);
+    }
+
+    /* No threshold: until the gauge is calibrated against it, every value is
+     * worth having in the history. */
+    if (battery_average_min_mv != 0u)
+    {
+        (void) mcu_dp_value_update(DPID_BATTERY_AVG_MIN_VOLTAGE, (u32) battery_average_min_mv);
     }
 
     if (!dps.valid)
