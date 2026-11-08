@@ -163,7 +163,7 @@ static uint16_t previous_rest_mv;
 static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv);
 static bool PairingRequested(void);
 static bool ReportBackoffOver(void);
-static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint16_t rest_mv);
+static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv);
 static void UpdateBackoff(bool reached_cloud, bool pairing);
 static void WaitForNextCycle(void);
 
@@ -232,12 +232,19 @@ void TempSensorRunCycle(void)
     bool          battery_damaged = Battery_IsDamaged(collapse_mv);
 
     Hdc3020_Reading reading;
-    bool            report_due = false;
-    int16_t         temp_c10   = 0;
+    bool            have_reading = Hdc3020_Read(&reading);
+    bool            report_due   = false;
+    int16_t         temp_c10     = 0;
 
-    if (Hdc3020_Read(&reading))
+    if (have_reading)
     {
-        report_due = ReportPolicy_Update(&report_policy, reading.temp_c10, &temp_c10);
+        /* On the schedule rather than the clock, like the backoff and for the
+         * same reason (report_hold_until_ms): a hold-off timed off the clock
+         * would end a few milliseconds after the cycle 30 minutes on about
+         * half the time, and slip a whole period. A cycle the button brings
+         * forward counts as the one before it, so after a report it delivers,
+         * the hold-off and the 4 h end up to a period early. Harmless. */
+        report_due = ReportPolicy_Update(&report_policy, reading.temp_c10, next_cycle_ms, &temp_c10);
 
         /* Cached whether or not a report is due. The module asks for the
          * current readings itself every time it reconnects, and a pairing
@@ -250,7 +257,11 @@ void TempSensorRunCycle(void)
     /* A failed sensor read is not an error to handle, it is a cycle with
      * nothing to say: no report is due, the cached values keep last cycle's
      * reading, and the next cycle tries the sensor again. The only thing that
-     * still opens a window is the button. */
+     * still opens a window is the button.
+     *
+     * Not even the 4 h report: a sensor that stays dead goes silent rather
+     * than repeat its last reading as if it were new, so a cloud log with
+     * nothing in it for more than about 4 h says something is wrong. */
 
     /* Every cycle, report due or not -- ReportBackoffOver says why. */
     bool backoff_over = ReportBackoffOver();
@@ -262,7 +273,7 @@ void TempSensorRunCycle(void)
      * its window only ends either hold if it gets through. */
     if ((report_due && backoff_over && !module_unpaired) || pairing)
     {
-        bool reached_cloud = RunWifiWindow(report_due, pairing, temp_c10, battery_mv);
+        bool reached_cloud = RunWifiWindow(have_reading, pairing, temp_c10, battery_mv);
 
         UpdateBackoff(reached_cloud, pairing);
     }
@@ -338,14 +349,15 @@ static void UpdateBackoff(bool reached_cloud, bool pairing)
 }
 
 /* One report and/or pairing window, start to finish. Returns whether the
- * module reached the cloud. rest_mv is this cycle's resting cell voltage, to
- * set the window's sag against.
+ * module reached the cloud. have_reading says this cycle read the sensor, and
+ * temp_c10 is then its filtered temperature. rest_mv is this cycle's resting
+ * cell voltage, to set the window's sag against.
  *
  * Every step has a deadline and every exit path goes through Tuya_PowerOff(),
  * because leaving the module powered is the one mistake that empties the cell
  * outright -- tens of milliamps against a budget built on microamps.
  */
-static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint16_t rest_mv)
+static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv)
 {
     bool reached_cloud = false;
 
@@ -383,10 +395,10 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint1
 
             if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms))
             {
-                /* Unconditional, not gated on report_due: the cloud is up and
-                 * the cached readings are this cycle's, so a pairing window
-                 * pushes the current state too. That is what makes the button
-                 * confirm to whoever pressed it that the device works. */
+                /* Unconditional, not gated on a report being due: the cloud is
+                 * up and the cached readings are this cycle's, so a pairing
+                 * window pushes the current state too. That is what makes the
+                 * button confirm to whoever pressed it that the device works. */
                 Tuya_ReportCachedDps();
 
                 Tuya_ServiceFor(pairing ? WIFI_PAIRING_DRAIN_MS : WIFI_DRAIN_MS);
@@ -394,11 +406,18 @@ static bool RunWifiWindow(bool report_due, bool pairing, int16_t temp_c10, uint1
                 /* Committed only here, on the one path where the value reached
                  * the cloud. Every other way out of this function leaves the
                  * policy alone, so the next cycle still finds the change
-                 * outstanding and tries again -- which matters because there
-                 * is no heartbeat to repair a dropped report later. */
-                if (report_due)
+                 * outstanding and tries again -- which matters because
+                 * otherwise a dropped change would wait for the 4 h report,
+                 * far too late for one worth sending.
+                 *
+                 * Whatever kind of window it was: a pairing window pushed this
+                 * cycle's reading too, so from here on that is what the cloud
+                 * shows, and the 0.3 C and the 4 h count from it. Not when the
+                 * sensor read failed, though -- what went out then was an
+                 * older cycle's reading, and this one has nothing to commit. */
+                if (have_reading)
                 {
-                    ReportPolicy_ReportSent(&report_policy, temp_c10);
+                    ReportPolicy_ReportSent(&report_policy, temp_c10, next_cycle_ms);
                 }
 
                 /* Paired, whatever an earlier window found. While the flag is

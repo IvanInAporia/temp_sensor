@@ -117,7 +117,15 @@ a timeout that is too short shows up as report windows failing on a working netw
 
 ## 2. Limit how often temperature reports go out, and report at least every 4 h
 
-- [ ] Done
+- [x] Done 2026-11-07. Three changes from the plan below, agreed before implementing:
+  - Any window that reaches the cloud commits this cycle's reading, pairing windows
+    included, unless the sensor read failed. A pairing window pushes the current reading
+    too, and without the commit the app could show a value up to ~1 °C off for up to 4 h.
+  - The time since the last report stops growing at 4 h (like `ReportBackoffOver`), so it
+    can't wrap. This replaces the comment about the 49.7-day wrap.
+  - Numbers kept at 1.0 °C / 30 min after replaying the week's cloud logs: front board
+    84 → ≈44 reports a day, kitchen 12 → 10, office 16 → 15 (firmware_design.md §4).
+    A 60 min hold-off would have given the front ≈34. Retune after the post-flash count.
 
 **Problem.** Two opposite problems, both about the time since the last report.
 - *Too many.* Reporting whenever the temperature moves 0.3 °C keeps the reading within
@@ -298,11 +306,16 @@ boots and set each timeout to about 2× the worst value seen.
 
 - [ ] Done
 
-Count the reports per day the old firmware sent. That number tests the field-run guess (see
-the Eneloop notes) that the battery is draining faster than expected, and shows what the
-hold-off saves. If the app's history is short, take this count before flashing item 2.
-Count again after, to see the new rules working: no more than 48 small-change reports a day,
-and no gap longer than about 4 h.
+**Before: done 2026-11-07**, from the Tuya cloud log (`tools/tuya_logs`). Over the full days
+11-02 to 11-06 the old firmware sent: front 78–105 reports a day, kitchen 4–17, office 10–28.
+At the front board's rate the battery budget gives a cell about 6 weeks. Replaying that week
+through item 2's rules gives about 44, 10 and 15 a day.
+
+**After:** flash item 2 and fetch the logs again after a few days (the free tier keeps 7
+days). Expect no more than 48 small-change reports a day, no gap longer than about 4 h while
+the sensor reads, and counts near the replayed ones. If the front board stays well above 44,
+the room moves faster than the interpolated replay assumed; the hold-off
+(`REPORT_HOLDOFF_MS`) is the knob.
 
 ### 5: does module firmware 3.0.93 answer 0x22?
 

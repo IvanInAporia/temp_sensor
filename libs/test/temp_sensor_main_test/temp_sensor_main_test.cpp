@@ -35,6 +35,14 @@ constexpr uint32_t kPauseMs        = 2u * 60u * 60u * 1000u;
 constexpr int      kCyclesPerPause = static_cast<int>(kPauseMs / kCyclePeriodMs);
 constexpr int      kCyclesPerDay   = static_cast<int>(24u * 60u * 60u * 1000u / kCyclePeriodMs);
 
+// A change under 1.0 C waits this long after the last report...
+constexpr uint32_t kHoldOffMs        = 30u * 60u * 1000u;
+constexpr int      kCyclesPerHoldOff = static_cast<int>(kHoldOffMs / kCyclePeriodMs);
+
+// ...and a steady room reports this often.
+constexpr uint32_t kMaxSilenceMs        = 4u * 60u * 60u * 1000u;
+constexpr int      kCyclesPerMaxSilence = static_cast<int>(kMaxSilenceMs / kCyclePeriodMs);
+
 // How many wifi_uart_service() calls the scripted module takes to boot and to
 // reach the cloud. The glue services once per poll, so these are "polls", and
 // they are small so a test runs in microseconds.
@@ -254,15 +262,15 @@ protected:
 TEST_F(TempSensorMainTest, SaysNothingWhileTheTemperatureHolds)
 {
     // This is the whole point of the design: measuring is ~110 uA for 13 ms,
-    // reporting is seconds at tens of milliamps. A stable room must cost
-    // nothing.
-    SettleAt(234);
+    // reporting is seconds at tens of milliamps. A stable room costs nothing
+    // for the 4 h after its last report.
+    SettleAt(234); // reported on the first of these three cycles
     int windows_after_settling = WindowsOpened();
 
-    RunCycles(50);
+    RunCycles(kCyclesPerMaxSilence - 3);
 
     EXPECT_EQ(windows_after_settling, WindowsOpened());
-    EXPECT_EQ(53, bspMockSensorWriteCalls()); // but it kept measuring
+    EXPECT_EQ(kCyclesPerMaxSilence, bspMockSensorWriteCalls()); // but it kept measuring
 }
 
 TEST_F(TempSensorMainTest, ASpikeDoesNotBringTheRadioUp)
@@ -287,6 +295,134 @@ TEST_F(TempSensorMainTest, ASustainedChangeDoesBringTheRadioUp)
     RunCycles(2); // one cycle of median lag, then the report
 
     EXPECT_EQ(windows + 1, WindowsOpened());
+}
+
+// --- How often: the hold-off and the 4 h report -----------------------------
+//
+// report_policy_test.cpp has the rules sample by sample. What only shows here
+// is that the cycle feeds them the right time and acts on them.
+
+TEST_F(TempSensorMainTest, ASmallChangeWaitsHalfAnHourAfterTheLastReport)
+{
+    ModuleReachesCloud();
+    ASSERT_EQ(1, WindowsDuring(3)); // the report after boot, then the window fills
+    uint32_t report_ms = bspMockWifiLastPowerOnMs();
+
+    StageReading(238, 55u); // 0.4 C: over the threshold, under the fast path
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerHoldOff - 3));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(report_ms + kHoldOffMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, ALateWakeDoesNotPushTheHoldOffACycleLater)
+{
+    // As with the backoff: a hold-off timed off the clock would end a few
+    // milliseconds after the cycle 30 min on whenever the report had started
+    // later than that cycle, and wait out a whole extra period.
+    SettleAt(234);
+    StageReading(280, 55u);
+    RunCycles(1); // one cycle of median lag
+
+    bspMockAdvanceMs(3u);           // this cycle wakes a little late...
+    ASSERT_EQ(1, WindowsDuring(1)); // ...and reports 28.0 C
+
+    StageReading(284, 55u); // 0.4 C on from it
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerHoldOff - 1));
+    EXPECT_EQ(1, WindowsDuring(1)); // 30 min after the report, on time
+}
+
+TEST_F(TempSensorMainTest, ASteadyRoomStillReportsEveryFourHours)
+{
+    // The app shows the device offline between windows, so the cloud log is
+    // the only sign of life -- and the only way the battery state gets out of
+    // a room that never changes.
+    ModuleReachesCloud();
+    ASSERT_EQ(1, WindowsDuring(1)); // the report after boot
+    uint32_t report_ms = bspMockWifiLastPowerOnMs();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerMaxSilence - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(report_ms + kMaxSilenceMs, bspMockWifiLastPowerOnMs());
+
+    EXPECT_EQ(6, WindowsDuring(kCyclesPerDay));
+}
+
+TEST_F(TempSensorMainTest, TheFourHourReportCarriesTheBatteryState)
+{
+    // It is how a low cell reaches the app from a room that never changes.
+    ModuleReachesCloud();
+    ASSERT_EQ(1, WindowsDuring(kCyclesPerMaxSilence)); // the report after boot, and nothing since
+
+    bspMockSetBatteryMv(1160u); // the cell has run down meanwhile
+    int first = tuyaSdkMockDpCount();
+    ASSERT_EQ(1, WindowsDuring(1)); // 4 h on
+
+    BatteryReport report = BatteryReportSince(first);
+
+    EXPECT_EQ(7, report.percent); // the plain curve at 1160 mV
+    EXPECT_EQ(static_cast<int>(kLow), report.level);
+}
+
+TEST_F(TempSensorMainTest, AFourHourReportThatFailsBacksOffLikeAnyOther)
+{
+    SettleAt(234);
+    ModuleBootsButNeverConnects();
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerMaxSilence - 3));
+    EXPECT_EQ(3, WindowsDuring(3)); // 4 h on, then its two retries
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    EXPECT_EQ(1, WindowsDuring(1));
+}
+
+TEST_F(TempSensorMainTest, ADeadSensorGoesSilentRatherThanRepeatItsLastReading)
+{
+    // The 4 h report needs a reading like any other. So a cloud log with
+    // nothing in it for more than about 4 h says something is wrong, instead
+    // of showing an old value as if it were new.
+    SettleAt(234);
+    bspMockSensorSetReadFails(true);
+
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+}
+
+TEST_F(TempSensorMainTest, WhatAPairingWindowDeliversCountsAsReported)
+{
+    // It pushed this cycle's reading, so that is what the app now shows, and
+    // the 0.3 C and the 4 h count from it.
+    SettleAt(234);
+    StageReading(238, 55u);
+    RunCycles(2); // moved 0.4 C, held back
+
+    ModuleReachesCloud();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1)); // pushes 23.8
+    bspMockReleaseButton();
+
+    // Not sent again when the hold-off ends, and the next report is 4 h after
+    // this window.
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerMaxSilence - 1));
+    EXPECT_EQ(1, WindowsDuring(1));
+}
+
+TEST_F(TempSensorMainTest, APairingWindowWithNoReadingCommitsNothing)
+{
+    // With the sensor read failed, what the window pushed was an older
+    // cycle's reading, and this cycle has nothing to commit.
+    SettleAt(234);
+    StageReading(238, 55u);
+    RunCycles(1); // one cycle of median lag
+
+    bspMockSensorSetReadFails(true);
+    ModuleReachesCloud();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+    bspMockSensorSetReadFails(false);
+
+    // Still measured from the report after boot: the 0.4 C change waits for
+    // its hold-off, 30 min after that one, and no longer.
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerHoldOff - 5));
+    EXPECT_EQ(1, WindowsDuring(1));
 }
 
 // --- What reaches the cloud -----------------------------------------------
@@ -942,9 +1078,9 @@ TEST_F(TempSensorMainTest, ASensorThatComesBackResumesReporting)
 
 TEST_F(TempSensorMainTest, ADroppedReportIsRetriedOnTheNextCycle)
 {
-    // The consequence of having no heartbeat: a change that failed to reach
-    // the cloud has to stay outstanding, or it is lost until the temperature
-    // happens to move again -- which in a stable room may be never.
+    // A change that failed to reach the cloud has to stay outstanding.
+    // Otherwise it would wait for the next 4 h report, far too late for a
+    // change worth sending.
     SettleAt(234);
 
     ModuleBootsButNeverConnects();

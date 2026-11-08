@@ -14,8 +14,8 @@ What the device does, how the code is arranged, and which decisions are load-bea
 
 ## 1. What it does
 
-Every five minutes: read the cell, read the sensor, decide whether the temperature
-has moved enough to be worth telling anyone, and if so bring up the Wi-Fi module,
+Every five minutes: read the cell, read the sensor, decide whether the reading is
+worth telling anyone (§4), and if so bring up the Wi-Fi module,
 report temperature, humidity and three battery datapoints (percentage, level, and
 whether the cell looks damaged), plus one with the lowest the cell was pulled to
 in the windows before (§5), and put it away again. Then sleep.
@@ -24,11 +24,12 @@ A press of the Wi-Fi button opens the same window for pairing instead, and can
 interrupt the sleep to do it. A device that isn't paired opens no report windows
 at all until the button pairs it (§4).
 
-**There is no heartbeat.** A temperature that never moves is never reported, and
-the Tuya app keeps showing the last value it was given. This is deliberate — see
-§4 — and it is the reason two other things in the code look the way they do: the
-first reading after boot always reports, and a report is only "spent" once it has
-actually reached the cloud.
+**Reports go out when the temperature moves, and at least every 4 h.** A move of
+1.0 °C goes out at once, one of 0.3 °C once 30 min have passed since the last
+report, and a room that holds steady still reports every 4 h, so the app can tell
+it from a dead device and the battery state gets out (§4). Two other things in the
+code follow from reporting on change: the first reading after boot always reports,
+and a report is only "spent" once it has actually reached the cloud.
 
 ## 2. Layout
 
@@ -43,7 +44,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (119 tests) over the same C
+libs/test/                  host GoogleTest suite (152 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -96,7 +97,7 @@ uint16_t battery_mv = BSP_Battery_ReadMv();     /* before any load is switched o
 
 if (Hdc3020_Read(&reading))
 {
-    report_due = ReportPolicy_Update(&report_policy, reading.temp_c10, &temp_c10);
+    report_due = ReportPolicy_Update(&report_policy, reading.temp_c10, next_cycle_ms, &temp_c10);
     Tuya_SetDps(temp_c10, reading.rh_pct, battery_pct, battery_state);
 }
 
@@ -128,8 +129,8 @@ One HDC3020 conversion is ~110 µA for 13 ms. One report is the T3-3S cold-booti
 associating and reaching the cloud — seconds at tens of milliamps, and on a single
 NiMH cell feeding a 3.3 V boost, roughly three times that current *at the cell*.
 
-That ratio is the whole battery life, so the cycle measures often and reports
-rarely. The rule, in [`report_policy.h`](../libs/src/report/report_policy.h):
+That ratio is most of the battery life, so the cycle measures often and reports
+rarely. The rules, in [`report_policy.h`](../libs/src/report/report_policy.h):
 
 - **A spike must not buy a report.** A median of the last three samples is the
   whole filter — it rejects any single outlier outright, whatever its size. The
@@ -137,18 +138,58 @@ rarely. The rule, in [`report_policy.h`](../libs/src/report/report_policy.h):
   means a real change is reported up to two periods after it starts.
 - **Only temperature triggers.** Humidity is far noisier and would undo the first
   rule; the battery moves so slowly that any useful threshold would take days to
-  cross. Both ride along on whatever report the temperature triggers.
+  cross. Both ride along on whatever report the temperature triggers, and the 4 h
+  report carries them out of a steady room.
 - **`REPORT_TEMP_DELTA_C10` is 0.3 °C**, a little over the sensor's own ±0.2 °C
   typical accuracy, so a report means the temperature moved rather than that the
-  sensor wandered. This is the knob for battery life vs responsiveness, and with
-  no heartbeat it is also the knob for how stale the app may get.
+  sensor wandered.
+
+### How often a report goes out
+
+Three rules, each against the last report that reached the cloud: how far the
+filtered temperature has moved from it, and how long ago it was.
+
+| Since the last report | Moved | |
+|---|---|---|
+| any time | 1.0 °C or more (`REPORT_TEMP_DELTA_FAST_C10`) | report |
+| 30 min or more (`REPORT_HOLDOFF_MS`) | 0.3 °C or more | report |
+| 4 h or more (`REPORT_MAX_SILENCE_MS`) | anything | report |
+
+- **The hold-off caps small changes at 48 reports a day.** On the 0.3 °C rule
+  alone a heating cycle swinging 0.6 °C every 20 min would send 144 a day; with
+  it, 48. When the hold-off ends the current reading goes out, so the app is back
+  within 0.3 °C. The cost is that a change under 1.0 °C can reach the app up to
+  30 min late.
+- **The 4 h report tells a steady room from a dead device.** The app shows the
+  device offline between windows, so the cloud log is the only sign of life, and
+  it shows repeated values. The 4 h report also gets the battery state out of a
+  room that never changes. It costs at most 6 reports a day, and only in a room
+  that sends almost nothing else.
+- **It is an ordinary report.** It commits like any other, and the backoff and
+  the unpaired flag apply to it unchanged. It needs a good sensor reading, so a
+  dead sensor goes silent instead of repeating its last value: no new log entry
+  for more than about 4 h means something is wrong. The code never calls it a
+  "heartbeat", which is the Tuya protocol's cmd 0x00.
+- **Times are on the schedule** (`next_cycle_ms`), like the backoff and for the
+  same reason. The time since the last report stops growing at 4 h, so it can't
+  wrap after 49.7 days.
+- **What it saves depends on the room.** Replayed on the logs from 2026-10-31 to
+  11-07 (`tools/tuya_logs`, with the signal between reports rebuilt by
+  interpolation): front board 84 → ≈44 reports a day, kitchen 12 → 10, office
+  16 → 15. Indoor rooms barely change. The front board's temperature moves all
+  day, and the hold-off halves its reports.
 
 ### Deciding and committing are two calls
 
 `ReportPolicy_Update()` decides; `ReportPolicy_ReportSent()` commits. A window that
 never reached the cloud simply never commits, so the next cycle still finds the
-change outstanding. Without a heartbeat there is nothing else that would ever
-repair a dropped report — in a stable room it could be lost for good.
+change outstanding. Otherwise a dropped report would wait for the next 4 h report,
+far too late for a change worth sending.
+
+Any window that reaches the cloud commits this cycle's reading, pairing windows
+included: it pushed that reading, so the 0.3 °C and the 4 h count from it. A cycle
+whose sensor read failed commits nothing, because what went out was an older
+reading.
 
 ### Backing off after failed windows
 
@@ -401,12 +442,12 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  13784       8    1648   15440    3c50
+  13860       8    1648   15516    3c9c
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~632 bytes and the stack has ~1410 available. Flash is 13.8 KB of
-16 KB, leaving ~2.6 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
+static RAM is ~632 bytes and the stack has ~1410 available. Flash is 13.9 KB of
+16 KB, leaving ~2.5 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
 13.6 KB, so expect about 1.1 KB more at `-O2`.)
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
@@ -456,7 +497,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 119 GoogleTest cases, ~2.6 s, run from **PowerShell or
+`libs/build_and_test.bat` — 152 GoogleTest cases, ~2.8 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
