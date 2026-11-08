@@ -10,6 +10,8 @@
 **/Debug/**
 
 #python 
+# Tuya cloud credentials for tools/tuya_logs (see its README.md)
+/tools/tuya_logs/config.json
 __pycache__/
 *.pyc
 .pytest_cache/

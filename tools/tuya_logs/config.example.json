@@ -1,0 +1,10 @@
+{
+  "endpoint": "https://openapi.tuyaus.com",
+  "access_id": "your cloud project's Access ID / Client ID",
+  "access_secret": "your cloud project's Access Secret / Client Secret",
+  "devices": {
+    "office": "device id",
+    "front": "device id",
+    "kitchen": "device id"
+  }
+}
