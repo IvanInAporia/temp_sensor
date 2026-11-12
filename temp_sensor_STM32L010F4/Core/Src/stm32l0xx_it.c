@@ -135,6 +135,10 @@ void SysTick_Handler(void)
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
+  /* The Wi-Fi button's debounce runs on this tick, so a press is watched for
+     whenever the MCU is awake -- minutes into a Wi-Fi window included. */
+  BSP_ButtonTick();
+
   /* USER CODE END SysTick_IRQn 1 */
 }
 

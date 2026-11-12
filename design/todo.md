@@ -15,7 +15,8 @@ tick it off here.
 
 Suggested order: 1a → 1b → 1c → 2 → 4. Item 5 doesn't depend on anything. Item 3 was
 dropped on 2026-10-11; item 2's 4 h report covers it. Item 6 came out of the kitchen
-board's silence on 2026-11-11 and was done the same day, together with item 5.
+board's silence on 2026-11-11 and was done the same day, together with item 5. Items 7
+and 8 came out of re-pairing taking several presses, and were done on 2026-11-12.
 
 The checks that need the board, the Tuya app or the MCU simulator are collected in
 [Hardware and manual checks](#hardware-and-manual-checks) at the end, to do once the code
@@ -313,6 +314,73 @@ cloud log can't say which, if any, it was in:
 
 ---
 
+## 7. Make sure the module heard the pairing command
+
+- [x] Done 2026-11-12
+
+**Why.** Re-pairing a board often took several presses of the Wi-Fi button, and holding
+it for a second or much longer didn't help. The button was checked first. It already
+wakes the MCU from an EXTI edge, and a press is confirmed by the level on waking and
+50 ms later, which a held press always passes. The holes it does have (a press while
+the MCU is awake in a window, a bounce edge in the tens of µs before Stop) don't explain
+a long hold failing. The pairing window's reset command (`0x04`) did: it went out once
+and nobody checked. A module that missed it carried on to its old network, and the
+window closed as if it had paired.
+
+**Done.**
+- The window waits up to 2 s for the module's answer to the command and sends it again
+  if none comes, up to three times in all.
+- DP 104 gains a `p` field after a pairing window: how many there were since the last
+  report, how far the last one got (`n` never alive, `x` never answered, `i` answered but
+  never pairing, `t` pairing but ran out, `k` pairing then cloud), and how many commands it
+  sent. Kept in a fourth RTC backup register (BKP3R), so it survives a Reset press between
+  attempts.
+- The button handling was left alone at first. Item 8 changed it the same day, once the
+  first board flashed with this showed presses going missing.
+
+**Checks on hardware:** item 7, in [Hardware and manual checks](#hardware-and-manual-checks).
+
+---
+
+## 8. Don't lose presses made while the board is awake; 0x05 is unpaired
+
+- [x] Done 2026-11-12
+
+**Why.** The first board flashed with item 7 paired, but only after about four presses.
+Its DP 104, pushed by the pairing window, read `r=pin c=3 w=2 u=0 m=05 s=0` with no `p`:
+- `c=3` with one pairing window means no other press ever ran a cycle. So they were made
+  while the board was awake, or lost at the wake check, or during the pairing window
+  itself.
+- `m=05` is `WIFI_LOW_POWER`. The module had no network and had stopped offering pairing.
+  The firmware didn't know the state, so it treated it as a router outage: two full ~29 s
+  report windows after the flash, both counted in `w` rather than `u`. A press made in
+  either would have been latched, ignored by the sleep after it, and thrown away by the
+  50 ms level check five minutes later.
+
+**Done.**
+- 0x05 counts as unpaired (`Tuya_IsUnpaired`): a window that finds it ends in ~4 s and the
+  device checks back every 2 h. It doesn't count as "pairing" for DP 104's `p` field.
+- The button is debounced by the BSP on the 1 ms SysTick (`button_debounce.h`): a press is
+  20 ms down without a break, and a held or stuck button is one press. A falling edge wakes
+  the MCU from Stop and restarts the count. `BSP_McuSleep` then stays awake until it is
+  decided, and only a confirmed press ends a sleep early.
+- The last look before Stop is made with interrupts masked, so an edge in that gap ends
+  the WFI instead of being handled and forgotten.
+- A press during a report window opens a pairing window as soon as that window closes. A
+  press during a pairing window is dropped: it was most likely the same person pressing
+  again for lack of feedback.
+- A press during the 2 s boot delay counts, and so does a button held through the reset.
+  **The quick way to re-pair is to hold the Wi-Fi button, press and let go of Reset, then
+  let go of the Wi-Fi button:** the first cycle pairs instead of reporting. The debounce
+  count starts at zero for that. It used to start full, which ignored a button held at
+  power-up.
+- The application's own 50 ms check is gone (`BSP_Wifi_TakeButtonPress` replaces
+  `BSP_Wifi_TakeButtonEvent` and `BSP_Wifi_ButtonIsPressed`).
+
+**Checks on hardware:** item 8, in [Hardware and manual checks](#hardware-and-manual-checks).
+
+---
+
 ## Hardware and manual checks
 
 Do these once the code changes above are in. Each needs the board, the Tuya app or the Tuya
@@ -399,6 +467,58 @@ deciding anything.
    cycle. The board should reset within 20–40 s and the next report read `r=wdg`.
 5. **The bus recovery.** Briefly short SDA to ground with a jumper during a cycle. Expect
    the next DP 104 to show `s=1` and readings to resume on the next cycle.
+
+### 7: what re-pairing looks like in DP 104
+
+- [ ] Done
+
+Needs item 6's DP 104 on the platform. Re-pair a board the way that used to take several
+presses, counting the presses, then fetch the logs after its next report. Each press that
+opened a window shows up in a `p` field, in the report after it:
+- **`k1` the first time:** the missing command was the problem, and it no longer goes
+  missing.
+- **`k2` or `k3`:** commands were going missing, and the resend made up for it. Worth a
+  UART capture (PA2/PA3) to see why.
+- **`x3`:** the module never answers `0x04` at all. Then the resends cost 6 s of waiting
+  and two extra restarts at the start of each pairing window, and can come out.
+  Capture the UART to see whether it pairs anyway (`t`/`k` would say so).
+- **`i1`:** the module takes the command and goes back to its network anyway. That's the
+  module's side, not the MCU's. Look at anti-misoperation mode before anything else.
+- **`t1` on attempts that seemed to fail:** the module was pairing and the phone didn't
+  finish. Look at the app side, Bluetooth, and whether 3 minutes is enough.
+- **`n0`:** the module didn't boot. Look at the cell and DP 101/103.
+- **Fewer windows counted than presses:** presses are being lost before a window opens.
+  A press while a pairing window is already open is dropped by design, so count only the
+  presses made after the last window ended (a pairing window lasts up to 3 min, or about
+  10 s after the device reaches the cloud). Any others lost are the button: a press during
+  a report window, or the bounce race. On 2026-11-12 three of about four presses opened no
+  window, which is what item 8 is for. If it happens again after item 8, see check 8.
+
+### 8: the button on the board
+
+- [ ] Done
+
+The debounce itself is host-tested. The board side isn't: the SysTick step, the edge
+restarting the count, staying awake to settle it, and the masked Stop entry. A CubeIDE
+build regenerates the makefiles, and the new header needs no new source folder.
+1. **Held through Reset.** Hold the Wi-Fi button, press and let go of Reset, let go of
+   the Wi-Fi button. The first window, about 2 s later, should be the pairing window: its
+   push carries `r=pin c=1 ...`, and no report window comes before it. Then reset without
+   touching the Wi-Fi button. The first window must be a report, not pairing. If it's
+   pairing, PA7 reads "pressed" for too long before `MX_GPIO_Init`.
+2. **One press, one window, whenever it's made.** Press Reset, wait about 5 s, then press
+   the Wi-Fi button once. The first cycle's report window is open then, and pairing should
+   follow straight after it. The report after that reads `p=1k...`. Repeat with a press
+   in the middle of a report window you can see (scope the Wi-Fi rail, PA4).
+3. **A quick tap counts.** Tap as briefly as you can, several times, a minute or more
+   apart. Each should open a window (count them in DP 104's `p=` against your taps).
+4. **Sleep current unchanged.** Run the sleep-only build (item 6, check 3). The settling
+   loop runs only after an edge, so with nobody touching the button the ~120 µA at the
+   cell shouldn't move. If it does, an edge is firing on its own, which is the pull-up
+   picking up noise. To see it, toggle PA5 (`BSP_Spare_Set`) in the EXTI callback in a
+   scratch build.
+5. **A stuck button costs nothing.** Hold the button down through two cycles: one pairing
+   window, then normal cycles with full sleeps, and the same sleep current.
 
 ### Sag monitor: DP 101 against the scope
 

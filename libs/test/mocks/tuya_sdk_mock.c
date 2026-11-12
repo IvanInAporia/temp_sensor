@@ -44,6 +44,22 @@ static int service_calls;
 static int protocol_init_calls;
 static int reset_wifi_calls;
 
+/* How long a module that takes the reset command takes to say it is pairing. */
+#define PAIRING_CALLS 3
+
+static TuyaSdkMockResetAnswer reset_answer;
+static int                    resets_to_lose;
+
+/* What mcu_get_reset_wifi_flag() returns, and an answer still on its way to
+ * it: it arrives on the next wifi_uart_service() pass, as a frame would. */
+static u8   reset_flag;
+static bool reset_answer_due;
+
+/* A module restarting into pairing: AP_STATE once wifi_uart_service has been
+ * called `pairing_at` times. */
+static bool pairing_due;
+static int  pairing_at;
+
 static uint8_t rx_bytes[RX_CAPACITY];
 static int     rx_byte_count;
 
@@ -64,6 +80,13 @@ void tuyaSdkMockReset(void)
     protocol_init_calls = 0;
     reset_wifi_calls    = 0;
 
+    reset_answer     = TUYA_MOCK_RESET_PAIRS;
+    resets_to_lose   = 0;
+    reset_flag       = RESET_WIFI_ERROR;
+    reset_answer_due = false;
+    pairing_due      = false;
+    pairing_at       = 0;
+
     memset(rx_bytes, 0, sizeof(rx_bytes));
     rx_byte_count = 0;
 
@@ -80,6 +103,16 @@ void tuyaSdkMockReset(void)
 void tuyaSdkMockSetSyncAnswer(TuyaSdkMockSyncAnswer answer)
 {
     sync_answer = answer;
+}
+
+void tuyaSdkMockSetResetAnswer(TuyaSdkMockResetAnswer answer)
+{
+    reset_answer = answer;
+}
+
+void tuyaSdkMockLoseResets(int count)
+{
+    resets_to_lose = count;
 }
 
 void tuyaSdkMockSetWifiState(uint8_t state)
@@ -118,7 +151,9 @@ void wifi_protocol_init(void)
     protocol_init_calls++;
 
     /* The module that owed an answer has been powered off. */
-    sync_pending = 0;
+    sync_pending     = 0;
+    reset_answer_due = false;
+    pairing_due      = false;
 
     /* The real one drops the ring and resets the cached work state, which is
      * exactly why Tuya_PowerOn has to call it on every window. Modelled,
@@ -132,6 +167,20 @@ void wifi_protocol_init(void)
 void wifi_uart_service(void)
 {
     service_calls++;
+
+    if (reset_answer_due)
+    {
+        reset_answer_due = false;
+        reset_flag       = RESET_WIFI_SUCCESS;
+    }
+
+    /* Ahead of the scripted boot, which is timed from this moment: whatever it
+     * says comes after the pairing, never in the same pass. */
+    if (pairing_due && (service_calls >= pairing_at))
+    {
+        pairing_due = false;
+        wifi_state  = AP_STATE;
+    }
 
     if (schedule_armed && ((service_calls - schedule_base) >= schedule_calls))
     {
@@ -164,17 +213,44 @@ u8 mcu_get_wifi_work_state(void)
     return wifi_state;
 }
 
+u8 mcu_get_reset_wifi_flag(void)
+{
+    return reset_flag;
+}
+
 void mcu_reset_wifi(void)
 {
     reset_wifi_calls++;
 
-    /* The real module restarts on the reset command and comes back in pairing
-     * mode, and the real mcu_reset_wifi() forgets the cached state with it
-     * (PORTED, ../../../tuya/mcu_api.c). So a module that was already online
-     * when the button was pressed is not online any more until the scripted
-     * boot says so again -- which is what keeps a pairing window from taking
-     * the old connection for the new one. */
+    /* The real mcu_reset_wifi() clears the answer and forgets the cached
+     * state before it transmits (PORTED, ../../../tuya/mcu_api.c), whatever
+     * becomes of the command. So a module that was already online when the
+     * button was pressed is not online any more until it says so again --
+     * which is what keeps a pairing window from taking the old connection for
+     * the new one. */
+    reset_flag = RESET_WIFI_ERROR;
+    wifi_state = WIFI_SATE_UNKNOW;
+
+    if ((resets_to_lose > 0) || (reset_answer == TUYA_MOCK_RESET_LOST))
+    {
+        if (resets_to_lose > 0)
+        {
+            resets_to_lose--;
+        }
+
+        return;
+    }
+
+    /* The real module answers, then restarts and comes back in pairing mode. */
+    reset_answer_due = true;
     ModuleRestarts();
+
+    if (reset_answer == TUYA_MOCK_RESET_PAIRS)
+    {
+        pairing_due   = true;
+        pairing_at    = service_calls + PAIRING_CALLS;
+        schedule_base = pairing_at;
+    }
 }
 
 static void RecordDp(uint8_t dpid, bool is_enum, uint32_t value)

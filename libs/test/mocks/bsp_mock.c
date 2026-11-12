@@ -12,8 +12,6 @@ static uint32_t now_ms;
 static int      sleep_calls;
 static uint32_t last_sleep_request_ms;
 static uint32_t total_sleep_requested_ms;
-static uint32_t early_wake_ms;
-static int      early_wake_remaining;
 
 static uint8_t  sensor_response[SENSOR_RESPONSE_MAX];
 static uint16_t sensor_response_len;
@@ -35,8 +33,13 @@ static bool     sag_running;
 static bool     sag_covered_window;
 static int      sleeps_with_sag_running;
 
-static bool button_event;
-static bool button_down;
+/* A press the real BSP's debounce would have confirmed, waiting to be taken;
+ * and presses scripted to happen part-way into the next sleep, or while the
+ * next window is open. */
+static bool     button_press;
+static bool     press_in_sleep;
+static uint32_t press_in_sleep_after_ms;
+static bool     press_in_window;
 
 static bool     wifi_powered;
 static int      wifi_power_on_calls;
@@ -84,8 +87,6 @@ void bspMockReset(void)
     sleep_calls              = 0;
     last_sleep_request_ms    = 0u;
     total_sleep_requested_ms = 0u;
-    early_wake_ms            = 0u;
-    early_wake_remaining     = 0;
 
     memset(sensor_response, 0, sizeof(sensor_response));
     sensor_response_len = 0u;
@@ -107,8 +108,10 @@ void bspMockReset(void)
     sag_covered_window      = false;
     sleeps_with_sag_running = 0;
 
-    button_event = false;
-    button_down  = false;
+    button_press            = false;
+    press_in_sleep          = false;
+    press_in_sleep_after_ms = 0u;
+    press_in_window         = false;
 
     wifi_powered          = false;
     wifi_power_on_calls   = 0;
@@ -247,10 +250,18 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 
     uint32_t slept_ms = sleep_time_ms;
 
-    if ((early_wake_remaining > 0) && (early_wake_ms < sleep_time_ms))
+    /* The real one ends a sleep early for a confirmed press and nothing else
+     * -- and for one made before the sleep, in the window just closed, before
+     * it starts. */
+    if (button_press)
     {
-        early_wake_remaining--;
-        slept_ms = early_wake_ms;
+        slept_ms = 0u;
+    }
+    else if (press_in_sleep && (press_in_sleep_after_ms < sleep_time_ms))
+    {
+        press_in_sleep = false;
+        button_press   = true;
+        slept_ms       = press_in_sleep_after_ms;
     }
 
     now_ms += slept_ms;
@@ -273,12 +284,6 @@ uint32_t bspMockLastSleepRequestMs(void)
 uint32_t bspMockTotalSleepRequestedMs(void)
 {
     return total_sleep_requested_ms;
-}
-
-void bspMockSetEarlyWake(uint32_t ms, int count)
-{
-    early_wake_ms        = ms;
-    early_wake_remaining = count;
 }
 
 void BSP_McuReset(void)
@@ -466,37 +471,35 @@ int bspMockSleepsWithSagMonitorRunning(void)
 
 /* --- Button --------------------------------------------------------------- */
 
-bool BSP_Wifi_TakeButtonEvent(void)
+bool BSP_Wifi_TakeButtonPress(void)
 {
-    bool event = button_event;
+    bool press = button_press;
 
-    button_event = false;
+    button_press = false;
 
-    return event;
-}
-
-bool BSP_Wifi_ButtonIsPressed(void)
-{
-    return button_down;
+    return press;
 }
 
 void bspMockPressButton(void)
 {
-    button_event = true;
-    button_down  = true;
+    button_press = true;
 }
 
 void bspMockReleaseButton(void)
 {
-    button_down = false;
+    /* Nothing to undo: the real BSP counts a held button once, and that is
+     * already all the application ever sees of it. */
 }
 
-void bspMockGlitchButton(void)
+void bspMockPressButtonDuringNextSleep(uint32_t after_ms)
 {
-    /* An edge with nothing behind it: the latch fires, the level never goes
-     * down. This is what the application's debounce exists to throw away. */
-    button_event = true;
-    button_down  = false;
+    press_in_sleep          = true;
+    press_in_sleep_after_ms = after_ms;
+}
+
+void bspMockPressButtonDuringNextWindow(void)
+{
+    press_in_window = true;
 }
 
 /* --- Wi-Fi module --------------------------------------------------------- */
@@ -507,6 +510,12 @@ void BSP_Wifi_PowerOn(void)
     wifi_power_on_calls++;
     wifi_last_power_on_ms = now_ms;
     sag_covered_window    = sag_running;
+
+    if (press_in_window)
+    {
+        press_in_window = false;
+        button_press    = true;
+    }
 }
 
 void BSP_Wifi_PowerOff(void)

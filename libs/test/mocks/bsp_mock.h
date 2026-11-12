@@ -54,11 +54,6 @@ uint32_t bspMockLastSleepRequestMs(void);
  */
 uint32_t bspMockTotalSleepRequestedMs(void);
 
-/* Make the next `count` sleeps end after `ms` instead of running their full
- * length -- the device's button wake. The mock returns the shorter figure and
- * advances the clock by it, exactly as the real one does from the RTC.
- */
-void bspMockSetEarlyWake(uint32_t ms, int count);
 
 /* --- Sensor bus ----------------------------------------------------------- */
 
@@ -122,16 +117,28 @@ int bspMockSleepsWithSagMonitorRunning(void);
 
 /* --- Button --------------------------------------------------------------- */
 
-/* Press: latches the edge BSP_Wifi_TakeButtonEvent reports AND holds the level
- * down, which is what a debounce confirms against.
+/* The mock deals in presses the real BSP has already debounced
+ * (BSP_Wifi_TakeButtonPress): bounce, glitches and a stuck button are the
+ * debounce's, and button_debounce_test has those. What is left to script is
+ * when the press happens.
  */
+
+/* A press, confirmed now: BSP_Wifi_TakeButtonPress reports it, and a sleep
+ * that starts before then ends before it starts. */
 void bspMockPressButton(void);
+
+/* Kept for the tests' reading order. A held button is one press, so letting go
+ * changes nothing the application can see. */
 void bspMockReleaseButton(void);
 
-/* Latch an edge without holding the level -- a bounce or a noise pulse. The
- * event is reported once; the debounce should then reject it.
- */
-void bspMockGlitchButton(void);
+/* A press part-way into the next sleep that is longer than `after_ms`: the
+ * sleep ends there and returns `after_ms`, advancing the clock by it, exactly
+ * as the real one does from the RTC. */
+void bspMockPressButtonDuringNextSleep(uint32_t after_ms);
+
+/* A press while the next Wi-Fi window is open: confirmed when the rail comes
+ * up. */
+void bspMockPressButtonDuringNextWindow(void);
 
 /* --- Wi-Fi module --------------------------------------------------------- */
 

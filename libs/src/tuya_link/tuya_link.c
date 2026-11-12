@@ -49,9 +49,19 @@ static uint8_t acks_expected;
 static uint8_t acks_received;
 static bool    ack_refused;
 
+/* A pairing state has been reported since the last Tuya_StartPairing. Watched
+ * on every Tuya_Service pass: see Tuya_PairingEntered. */
+static bool pairing_entered;
+
 /* DP 101 goes out only below this. Above it the boost still has plenty of
  * margin, and the DP would only add noise to the app's history. */
 #define BATTERY_MIN_REPORT_BELOW_MV 1000u
+
+/* The module is offering pairing: SmartConfig, AP, or both at once. */
+static bool IsPairingState(uint8_t state)
+{
+    return (state == SMART_CONFIG_STATE) || (state == AP_STATE) || (state == SMART_AND_AP_STATE);
+}
 
 static void OnByteReceived(void)
 {
@@ -140,6 +150,15 @@ void Tuya_PowerOff(void)
 void Tuya_Service(void)
 {
     wifi_uart_service();
+
+    /* Here, on every pass, because the state the module reports is only ever
+     * the latest one, and a pairing state lasts at least as long as somebody
+     * takes to pair it. Not Tuya_IsUnpaired(): a module asleep in low power
+     * has no network either, but it is not offering pairing. */
+    if (IsPairingState(mcu_get_wifi_work_state()))
+    {
+        pairing_entered = true;
+    }
 }
 
 bool Tuya_WaitUntil(bool (*condition)(void), uint32_t timeout_ms)
@@ -191,12 +210,18 @@ bool Tuya_IsCloudConnected(void)
 
 bool Tuya_IsUnpaired(void)
 {
-    /* The three pairing modes. A module that has a network reports 0x02
-     * (WIFI_NOT_CONNECTED) and up instead, even when it cannot reach that
-     * network -- a router that is down looks like that, not like this. */
+    /* The three pairing modes, and low power (0x05, WIFI_LOW_POWER): where a
+     * module with no network goes once it has offered pairing for its three
+     * minutes and nobody took it up. The board seen on 2026-11-12 reported it in
+     * two report windows after a flash (DP 104 m=05), each waiting out the full
+     * cloud timeout as if a router were down, until the button paired it.
+     *
+     * A module that has a network reports 0x02, 0x03 or 0x04 instead, even when
+     * it cannot reach that network -- a router that is down looks like that,
+     * not like this. */
     uint8_t state = mcu_get_wifi_work_state();
 
-    return (state == SMART_CONFIG_STATE) || (state == AP_STATE) || (state == SMART_AND_AP_STATE);
+    return IsPairingState(state) || (state == WIFI_LOW_POWER);
 }
 
 uint8_t Tuya_WifiState(void)
@@ -209,8 +234,24 @@ void Tuya_StartPairing(void)
     /* Reset (0x04), not "reset and select mode" (0x05): 0x05 picks between the
      * old EZ broadcast and AP, and the T3-3S pairs over Bluetooth or AP. 0x04
      * lets the module use its own default, which on a Wi-Fi + Bluetooth module
-     * resets both and pairs over either. */
+     * resets both and pairs over either.
+     *
+     * mcu_reset_wifi() also clears the answer and the cached state (PORTED,
+     * ../../../tuya/mcu_api.c), so a pairing state seen from here on is one the
+     * module reported after this command, not before it. */
+    pairing_entered = false;
+
     mcu_reset_wifi();
+}
+
+bool Tuya_PairingAnswered(void)
+{
+    return (mcu_get_reset_wifi_flag() == RESET_WIFI_SUCCESS);
+}
+
+bool Tuya_PairingEntered(void)
+{
+    return pairing_entered;
 }
 
 void Tuya_SetDps(int16_t temp_c10,

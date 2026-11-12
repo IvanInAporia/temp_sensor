@@ -21,12 +21,13 @@ whether the cell looks damaged), plus one with the lowest the cell was pulled to
 in the windows before (§5), and put it away again. Then sleep.
 
 A press of the Wi-Fi button opens the same window for pairing instead, and can
-interrupt the sleep to do it. A device that isn't paired checks back with one short
+interrupt the sleep to do it. A press made while a report window is open opens one
+as soon as that window closes. A device that isn't paired checks back with one short
 window every 2 h until the button pairs it (§4).
 
 When something went wrong since the last report got through (a reset, failed
-windows or failed sensor reads), the next report also carries a line of
-diagnostic text, DP 104 (§4). A watchdog resets a board that stops making progress
+windows or failed sensor reads), or the button opened a pairing window, the next
+report also carries a line of diagnostic text, DP 104 (§4). A watchdog resets a board that stops making progress
 (§5).
 
 **Reports go out when the temperature moves, and at least every 4 h.** A move of
@@ -50,7 +51,7 @@ tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (171 tests) over the same C
+libs/test/                  host GoogleTest suite (179 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -282,8 +283,14 @@ first report after boot lands, the policy asks for one on every cycle.
 
 The module's first state report says whether it is paired. `SMART_CONFIG_STATE`
 (0x00), `AP_STATE` (0x01) and `SMART_AND_AP_STATE` (0x06) mean it is waiting to
-be paired (`Tuya_IsUnpaired()`). A router that is down looks different: the
-module reports 0x02 and gets the backoff instead.
+be paired, and `WIFI_LOW_POWER` (0x05) that it has no network either, having
+offered pairing for three minutes with nobody taking it up (`Tuya_IsUnpaired()`).
+0x05 went unrecognised until 2026-11-12, when a freshly flashed board reported it
+in two report windows (DP 104 `w=2 u=0 m=05`). Each waited out the full cloud
+timeout as if a router were down. A router that is down looks different: the
+module reports 0x02 and gets the backoff instead. Only the three pairing states
+count as "the module entered pairing" for DP 104's `p` field: a module asleep in
+low power is offering pairing to nobody.
 
 - **A report window that finds the module unpaired powers off at once**, about
   4 s in rather than 29.
@@ -315,18 +322,37 @@ r=pin c=17 w=3 u=0 m=02 s=0
 | `c` | cycles run (5 min each), i.e. how long the device kept going |
 | `w` | report windows that did not deliver (pairing windows don't count) |
 | `u` | of those, how many found the module unpaired |
-| `m` | the module's Wi-Fi state as the last of them closed: `02` no router, `03` router but no cloud, `04` cloud but not confirmed, `00`/`01`/`06` pairing, `ff` never spoke |
+| `m` | the module's Wi-Fi state as the last of them closed: `02` no router, `03` router but no cloud, `04` cloud but not confirmed, `00`/`01`/`06` pairing, `05` low power with no network, `ff` never spoke |
 | `s` | cycles whose sensor read failed |
+| `p` | only after the button opened a pairing window: how many did, how the last one went, and how many reset commands it sent (below) |
 
 The example is the kitchen's 11-11 story replayed in the tests: an outage, three
 failed windows that never reached the router, then the Reset button 10 cycles
 into the pause. `c=17` says the board kept cycling, so it didn't hang. `m=02`
 says the router wasn't there.
 
-- **Sent only when there is something to say**: after a reset, or after failed
-  windows or sensor reads. An ordinary report leaves DP 104 out.
+`p=2t1` is two pairing windows, the last of which put the module into pairing at
+the first reset command and ran out with nobody finishing. The letter says how
+far the window got (§7, "Pairing"):
+
+| Letter | The module... |
+|---|---|
+| `n` | never came alive, so was never asked |
+| `x` | never answered the reset command, however many times it went |
+| `i` | answered, but never said it was pairing: it went back to its old network |
+| `t` | was pairing, and the window ran out first |
+| `k` | was pairing, then reached the cloud: paired, or restarted partway and went back to its old network (the sag DPs tell which) |
+
+A pairing window's own push carries the record as it stood before the window
+opened, so each attempt is told in the report after it. Three presses that end
+`t`, `t`, `k` read `p=2t1` in the window that paired and `p=1k1` in the report
+after that. The field goes last, and only while the line has room for it, which
+every real line does.
+
+- **Sent only when there is something to say**: after a reset, a pairing window,
+  or failed windows or sensor reads. An ordinary report leaves DP 104 out.
 - **It survives every reset but a power-on.** It is saved at the end of every
-  cycle to three of the RTC's backup registers (`BSP_Retained_*`), with a
+  cycle to four of the RTC's backup registers (`BSP_Retained_*`), with a
   checksum that turns away what a power-on leaves there. The report after the
   Reset button is the one that most needs to say what came before it.
 - **The platform needs the DP**: ID 104, identifier `diagnostics`, String,
@@ -370,9 +396,29 @@ style:
    28.4 RTC seconds whatever LSI really runs at, so 10 leaves nearly 3× margin. A
    chunk is fed only if the RTC says time passed: a wakeup that fires at once, or
    a calendar that has stopped, would otherwise spin there with the watchdog
-   content. Only the button ends the sleep early (`button_woke`, set by the EXTI
-   callback). The latched `button_event` would not do: a glitch the debounce
-   hasn't seen yet would end every chunk after it.
+   content. Only a confirmed press ends the sleep early (6, below).
+6. **The button is debounced by the BSP, on the 1 ms tick, whatever the MCU is
+   doing.** A press is the pin down for 20 ms without a break
+   (`button_debounce.h`, table-tested in `button_debounce_test`). SysTick steps
+   it whenever the MCU is awake, through the sensor read and every Wi-Fi window.
+   In Stop nothing ticks, so the falling edge wakes the MCU and restarts the
+   count, and `BSP_McuSleep` stays awake on the tick (`SettleButton`, at most
+   100 ms) until the press is decided either way. The last look at the button
+   before Stop is made with interrupts masked, so an edge in that gap stays
+   pending and ends the WFI at once instead of being handled and forgotten. A
+   held or stuck button is one press. The count starts at zero, so **a button
+   held through a reset is a press**: hold the Wi-Fi button, press and let go
+   of Reset, and the first cycle pairs instead of reporting. That relies on
+   main.c's 2 s boot delay to confirm the press before the first cycle asks.
+   Without the delay, the press would complete during the first report window
+   and pair straight after it. A stuck button does the same once per reset. A
+   confirmed press waits
+   until the application takes it: one made during a report window keeps the
+   next sleep from starting, and opens a pairing window straight after.
+   Until 2026-11-12 the application judged the level itself, once on waking and
+   once 50 ms into the next cycle. A press made while a window was open was gone
+   by then. Re-pairing a freshly flashed board, whose first windows ran ~29 s
+   each, three of about four presses opened no window.
 
 ### The sag monitor: the cell's minimum under load
 
@@ -546,13 +592,23 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  15748       8    1712   17468    443c
+  16144       8    1720   17872    45d0
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~696 bytes and the stack has ~1340 available. **Flash is 15.4 KB of
-16 KB, leaving ~630 bytes.** (When `-Os` gave 12.5 KB, the same tree at `-O2` was
-13.6 KB, so `-O2` no longer fits.)
+static RAM is ~704 bytes and the stack has ~1330 available. **Flash holds `text`
+plus `data`: 16,152 of 16,384 bytes, leaving ~230. Release (without
+`DEBUG`/`NO_SLEEP`) is 36 bytes bigger still: 16,180 + 8, leaving ~196.** (When
+`-Os` gave 12.5 KB, the same tree at `-O2` was 13.6 KB, so `-O2` no longer fits.)
+
+On 2026-11-12, from 15,748 + 8: the pairing check (§7, "Pairing") cost 356 bytes:
+the answer wait and resend, the `p` field of DP 104 with its fourth retained word,
+and the pairing-state watch in the service loop. Most of it is inlined into `main`
+by LTO. The button debounce on the tick (§5, item 6) and 0x05 as unpaired cost
+another 68, plus 4 of `data` for the count's starting value: the SysTick step and
+the settling loop, less the application's own 50 ms check and level reads that
+went. Starting the count at zero instead, so a button held through a reset is a
+press, then gave back 28.
 
 The 2026-11-11 robustness work cost 1,888 bytes, up from 13,860: the watchdog and
 chunked sleep, the I2C bus recovery (~200 B with the HAL de-init it pulls in), the
@@ -603,13 +659,35 @@ the instant the command goes out. The product runs Tuya's anti-misoperation mode
 (`"m":2`): an unpaired reset goes back to the old network after three minutes, the
 same three minutes the pairing window waits.
 
+The command is a plain transmit, and **the window makes sure it got there.** The
+module answers `0x04` the moment the command arrives (the SDK's `reset_wifi_flag`,
+read by `Tuya_PairingAnswered`). With no answer in 2 s the command goes again, up
+to three times in all (`AskModuleToPair`). Until 2026-11-12 it went once and
+nobody looked. A module that missed it carried on to its old network, and the
+window closed as if it had paired, which from outside is a button that did
+nothing. Re-pairing took several presses, however long the button was held.
+That is what moved suspicion from the button to this command. Whether the
+command is really what goes missing is what DP 104's `p` field now records
+(§4), together with whether the module ever reported a pairing state
+afterwards (`Tuya_PairingEntered`, watched on every service pass because the
+state that last shows is the cloud).
+
+The button was looked at first and left alone at that point. PA7 already woke the
+MCU on an EXTI edge, and a held press always passed the level checks, so neither
+known hole explained a long hold failing. Those holes were a press made while the
+MCU was awake in a window, and a bounce edge in the tens of µs before Stop. The
+first board flashed with the check then paired after about four presses. Its
+DP 104 showed only one had opened a window, and its first two report windows ran
+~29 s each because of the unrecognised 0x05 (§4). So both holes were closed the
+same day (§5, item 6).
+
 The remaining compiler warnings in `tuya/` (a misleadingly indented
 `tuya_strncpy`, an unused local in a `#ifdef`-thinned switch) are untouched vendor
 code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 171 GoogleTest cases, ~3.5 s, run from **PowerShell or
+`libs/build_and_test.bat` — 179 GoogleTest cases, ~3.5 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -626,7 +704,23 @@ that the module is never left powered.
 The mock watchdog records the longest stretch of awake time between two feeds,
 so "nothing waits unwatched" is a test (`NothingTheCycleDoesAwakeGoesLongUnfed`),
 not a promise. The tests added on 2026-11-11 were each checked by breaking the
-code they cover (18 deliberate changes, every one caught).
+code they cover (18 deliberate changes, every one caught), and so were the
+2026-11-12 pairing tests (18 more) and the button and low-power tests (8 more),
+all caught.
+
+The mock module takes a pairing reset one of three ways
+(`tuyaSdkMockSetResetAnswer`): it answers and says it is pairing before its
+scripted boot goes on (the default), it answers and boots straight back to its
+network, or it never gets the command. `tuyaSdkMockLoseResets(n)` loses the
+next n on the way.
+
+The mock board deals in presses its debounce has already confirmed: bounce,
+glitches and a stuck button are `button_debounce_test`'s, millisecond by
+millisecond. What a cycle test scripts is when the press comes: before the cycle
+(`bspMockPressButton`), part-way into the next sleep, or while the next window is
+open. What can't be tested on the host is the board side of it: the tick, the
+edge, the settling and the masked Stop entry in `bsp_stm32.c`. Those are hardware
+check 8 in [todo.md](todo.md).
 
 ## 9. Things deliberately not done
 

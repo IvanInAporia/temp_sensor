@@ -61,6 +61,10 @@ void Wifi_RailOff(void);
    handler and Error_Handler, which used to spin forever. */
 void BSP_FatalReset(void) __attribute__((noreturn));
 
+/* bsp_stm32.c: the Wi-Fi button's debounce, one step per tick.  For
+   SysTick_Handler, so the button is watched whenever the MCU is awake. */
+void BSP_ButtonTick(void);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

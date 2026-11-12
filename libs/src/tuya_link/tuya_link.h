@@ -82,9 +82,11 @@ bool Tuya_IsAlive(void);
  */
 bool Tuya_IsCloudConnected(void);
 
-/* True while the module says it is waiting to be paired -- it never was, or it
- * was removed in the app -- so it has no network to try and will not reach the
- * cloud however long it is given.
+/* True while the module says it has no network -- it never was paired, or it
+ * was removed in the app -- so it will not reach the cloud however long it is
+ * given. That is any of the three pairing states, or low power (0x05): where
+ * such a module goes once it has offered pairing for three minutes with nobody
+ * taking it up.
  *
  * Known from Tuya_IsAlive() on: the module's first state report is what says
  * so. False before that, when nothing is known yet.
@@ -92,9 +94,10 @@ bool Tuya_IsCloudConnected(void);
 bool Tuya_IsUnpaired(void);
 
 /* The Wi-Fi state the module last reported, as the SDK numbers it (wifi.h:
- * 0x02 no router, 0x03 router, 0x04 cloud, 0x00/0x01/0x06 pairing), or 0xFF if
- * it has said nothing since Tuya_PowerOn. Still readable after Tuya_PowerOff,
- * which is when the diagnostic record (diag_record.h) wants it.
+ * 0x02 no router, 0x03 router, 0x04 cloud, 0x00/0x01/0x06 pairing, 0x05 low
+ * power with no network), or 0xFF if it has said nothing since Tuya_PowerOn.
+ * Still readable after Tuya_PowerOff, which is when the diagnostic record
+ * (diag_record.h) wants it.
  */
 uint8_t Tuya_WifiState(void);
 
@@ -106,11 +109,29 @@ uint8_t Tuya_WifiState(void);
  * false until it has actually been paired, even if it was online a moment
  * before.
  *
+ * A plain transmit: whether the module got it is for Tuya_PairingAnswered to
+ * say, and sending it again is the only remedy. Each call starts the two
+ * answers below over.
+ *
  * The product runs Tuya's anti-misoperation mode (CONFIG_MODE in
  * ../../../tuya/protocol.h): a module that is not paired within three minutes
  * goes back to the network it already had, so a stray press loses nothing.
  */
 void Tuya_StartPairing(void);
+
+/* The module has answered the reset command from the last Tuya_StartPairing.
+ * It answers as soon as the command arrives, before it restarts, so this says
+ * the command got there -- not that pairing has begun.
+ */
+bool Tuya_PairingAnswered(void);
+
+/* The module has said it is pairing -- reported 0x00, 0x01 or 0x06 -- since
+ * the last Tuya_StartPairing. Low power (0x05) does not count: the module is
+ * then unpaired, but not offering pairing to anyone. Kept rather than read off
+ * the current state, because a pairing that gets through leaves that state
+ * behind: by the end it says "cloud".
+ */
+bool Tuya_PairingEntered(void);
 
 /* Cache one complete set of readings. Does not transmit.
  *

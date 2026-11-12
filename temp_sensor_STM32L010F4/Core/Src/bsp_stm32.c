@@ -22,6 +22,7 @@
 #include "bsp.h"
 
 #include "battery.h"
+#include "button_debounce.h"
 #include "main.h"
 #include "stm32l0xx_ll_adc.h"
 
@@ -87,9 +88,15 @@ extern __IO uint32_t uwTick;
  * nanoamps on average, against a ~120 uA sleep at the cell. */
 #define SLEEP_CHUNK_MAX_MS 10000u
 
+/* The longest BSP_McuSleep stays awake deciding a button edge. A press is
+ * decided within BUTTON_DEBOUNCE_MS of its bounce settling, and an edge with
+ * nothing behind it at once; this only bounds a pin that will not settle. */
+#define BUTTON_SETTLE_MAX_MS 100u
+
 /* In RTC->BKP4R from BSP_FatalReset until the next BSP_Init: a software reset
- * that finds it was a fault. BKP0R-BKP2R are the retained words; BKP3R is
- * spare. */
+ * that finds it was a fault. BKP0R-BKP3R are the retained words, and BKP4R
+ * is the last there is. */
+_Static_assert(BSP_RETAINED_WORDS <= 4u, "the retained words would run into the fault marker in BKP4R");
 #define FAULT_MARKER 0xFA017ED0u
 
 /* The battery channel. The cell is wired straight to PA6 with no divider
@@ -125,14 +132,30 @@ static uint32_t reset_flags;
 /* BSP_FatalReset's mark was found at BSP_Init. */
 static bool fault_reset;
 
-/* Written by the EXTI interrupt, read and cleared by the application. */
-static volatile bool button_event;
-
-/* Written by the EXTI interrupt, cleared by BSP_McuSleep before each chunk:
- * the press is what ended that chunk. Separate from button_event, which stays
- * latched until the application takes it -- a glitch the debounce has not seen
- * yet must not end every chunk after it. */
-static volatile bool button_woke;
+/* The Wi-Fi button (BSP_Wifi_TakeButtonPress).
+ *
+ * button_low_ms is the debounce count (button_debounce.h), stepped by SysTick
+ * and started over by every falling edge. It starts at zero, so a button held
+ * through a reset is a press. Hold the Wi-Fi button, press and let go of
+ * Reset: the debounce confirms it in main.c's 2 s boot delay, and the first
+ * cycle pairs instead of reporting. SysTick runs from HAL_Init, and until
+ * MX_GPIO_Init gives PA7 its pull-up the pin reads 0, "pressed" (GPIOA
+ * unclocked, then analog). Only SystemClock_Config runs in between, a
+ * millisecond or two, far short of BUTTON_DEBOUNCE_MS. The first sample after
+ * it sees the pull-up and starts the count over.
+ *
+ * button_press is a completed press, set by SysTick and taken by the
+ * application.
+ *
+ * button_edge is set by every falling edge and cleared by BSP_McuSleep once it
+ * has stayed awake to decide it. Also what keeps it out of Stop while an edge
+ * is undecided.
+ *
+ * None is cleared by BSP_Init: a press made in the boot delay, before it, is a
+ * press -- "Reset, then the Wi-Fi button" is how re-pairing usually starts. */
+static volatile uint8_t button_low_ms;
+static volatile bool    button_press;
+static volatile bool    button_edge;
 
 /* Written from thread context (the BSP_Wifi_* setters) and read from the UART
  * interrupt, so volatile: without it the compiler is free to cache one of
@@ -251,9 +274,6 @@ void BSP_Init(void)
      own on every call, so that one is only an interrupt arriving in the middle
      of the first report window. Take it down. */
   (void) HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
-
-  button_event = false;
-  button_woke  = false;
 
   /* Known-off state. main.c already parks the Wi-Fi rail before calling here;
      doing it again is free and makes this function stand on its own. */
@@ -404,6 +424,39 @@ static uint32_t RtcElapsedMs(uint32_t from_ms, uint32_t to_ms)
 
 static uint32_t SleepOnce(uint32_t sleep_time_ms);
 
+/* Switch to ground against the internal pull-up, so pressed reads low
+ * (easyeda/review-notes.md 6.2). A register read: SysTick asks every
+ * millisecond. */
+static bool ButtonIsDown(void)
+{
+  return ((IN_WIFI_BUTTON_GPIO_Port->IDR & IN_WIFI_BUTTON_Pin) == 0u);
+}
+
+/* The pin reads pressed and the debounce has not finished counting it. */
+static bool ButtonUndecided(void)
+{
+  return ButtonIsDown() && (button_low_ms < BUTTON_DEBOUNCE_MS);
+}
+
+/* Stay awake on the 1 ms tick until the edge just seen is decided: a press
+ * (button_press), or not -- the pin back up, or a button held since before,
+ * whose count is already full. Returns how long that took.
+ *
+ * Only awake can it be decided. In Stop the tick does not run, and a press that
+ * starts and ends there leaves nothing behind but its edge.
+ */
+static uint32_t SettleButton(void)
+{
+  uint32_t start_ms = HAL_GetTick();
+
+  while (!button_press && ButtonUndecided() && ((HAL_GetTick() - start_ms) < BUTTON_SETTLE_MAX_MS))
+  {
+    BSP_Idle();
+  }
+
+  return HAL_GetTick() - start_ms;
+}
+
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 {
   /* Never into a sleep with the sag monitor running: the converter and its
@@ -419,18 +472,29 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
   uint32_t slept_ms = 0u;
 
   /* In chunks, with the watchdog fed between them (SLEEP_CHUNK_MAX_MS). Only
-     the button ends the sleep early; any other wake goes on to the next
-     chunk, as the caller's own loop would. */
-  while (slept_ms < sleep_time_ms)
+     a press ends the sleep early, and only one the debounce has confirmed: a
+     press made before the sleep -- in a window -- ends it before it starts,
+     and any other wake goes on to the next chunk, as the caller's own loop
+     would. */
+  while ((slept_ms < sleep_time_ms) && !button_press)
   {
+    if (button_edge)
+    {
+      /* An edge woke the MCU, or came while it was awake. Decide it now, on
+         the tick: back in Stop nothing would count it, and the press would be
+         lost unless it outlasted the chunk. Time that passes, like a sleep. */
+      button_edge = false;
+      slept_ms   += SettleButton();
+
+      continue;
+    }
+
     uint32_t chunk_ms = sleep_time_ms - slept_ms;
 
     if (chunk_ms > SLEEP_CHUNK_MAX_MS)
     {
       chunk_ms = SLEEP_CHUNK_MAX_MS;
     }
-
-    button_woke = false;
 
     uint32_t chunk_slept_ms = SleepOnce(chunk_ms);
 
@@ -443,19 +507,14 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
     {
       BSP_Watchdog_Refresh();
     }
-
-    if (button_woke)
-    {
-      break;
-    }
   }
 
   return slept_ms;
 }
 
-/* One Stop, of at most WAKEUP_MAX_SECONDS, ended by the RTC wakeup or the
- * button. Returns what the RTC says it lasted, and folds that into
- * HAL_GetTick().
+/* One Stop, of at most WAKEUP_MAX_SECONDS, ended by the RTC wakeup or a button
+ * edge -- or none at all, if the button already has something to decide.
+ * Returns what the RTC says it lasted, and folds that into HAL_GetTick().
  */
 static uint32_t SleepOnce(uint32_t sleep_time_ms)
 {
@@ -525,13 +584,33 @@ static uint32_t SleepOnce(uint32_t sleep_time_ms)
 
   /* Wakes on the RTC wakeup timer or on the button's EXTI line. Both are
      configured as EXTI sources, which is what lets them fire with the core
-     stopped and every clock off. */
-  HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+     stopped and every clock off.
+
+     Interrupts are masked from the last look at the button to the WFI. Without
+     the mask, an edge in that gap ran its handler and was gone, and Stop
+     waited for the next one: a press whose last bounce edge landed there left
+     the board asleep with the button held. Masked, the edge stays pending,
+     and a pending interrupt ends the WFI at once -- masked or not. Its handler
+     runs at the __enable_irq. */
+  __disable_irq();
+
+  bool stopped = !button_press && !button_edge;
+
+  if (stopped)
+  {
+    HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+  }
+
+  __enable_irq();
 
   /* Stop always exits onto MSI, whatever was running before. Everything
      downstream -- the LPUART's baud rate, the I2C timing, the ADC clock -- is
-     computed for HSI16, so this is not optional and not deferrable. */
-  SystemClock_Config();
+     computed for HSI16, so this is not optional and not deferrable. Skipped
+     only when Stop was, which leaves the clock where it was. */
+  if (stopped)
+  {
+    SystemClock_Config();
+  }
 
   HAL_ResumeTick();
 
@@ -737,38 +816,51 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart)
   }
 }
 
-bool BSP_Wifi_TakeButtonEvent(void)
+bool BSP_Wifi_TakeButtonPress(void)
 {
-  /* Read and clear together. Without the mask, a press landing between the two
-     would be cleared without ever being reported -- and the next chance to
-     notice it is five minutes away. */
+  /* Read and clear together. Without the mask, a press completing between the
+     two would be cleared without ever being reported. */
   __disable_irq();
 
-  bool event = button_event;
+  bool press = button_press;
 
-  button_event = false;
+  button_press = false;
 
   __enable_irq();
 
-  return event;
+  return press;
 }
 
-bool BSP_Wifi_ButtonIsPressed(void)
+/* The debounce, every millisecond the MCU is awake: called from SysTick_Handler
+ * (stm32l0xx_it.c), whose tick runs through every wait there is -- the sensor
+ * read, HAL_Delay, a Wi-Fi window, SettleButton -- and stops only in Stop. */
+void BSP_ButtonTick(void)
 {
-  /* Switch to ground against the MCU's internal pull-up, so pressed reads low
-     (easyeda/review-notes.md 6.2). */
-  return (HAL_GPIO_ReadPin(IN_WIFI_BUTTON_GPIO_Port, IN_WIFI_BUTTON_Pin) == GPIO_PIN_RESET);
+  /* Through a local: the step takes a plain pointer. A falling edge that
+     restarts the count between the read and the write is overwritten, but the
+     tick would have seen the pin up itself unless the release lasted under a
+     millisecond. */
+  uint8_t low_ms = button_low_ms;
+
+  if (ButtonDebounce_Sample(&low_ms, ButtonIsDown()))
+  {
+    button_press = true;
+  }
+
+  button_low_ms = low_ms;
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if (GPIO_Pin == IN_WIFI_BUTTON_Pin)
   {
-    /* The falling edge only. Everything else about the press -- debounce, how
-       long it was held -- is the application's, which reads the level through
-       BSP_Wifi_ButtonIsPressed once it is running again. */
-    button_event = true;
-    button_woke  = true;
+    /* A falling edge: the pin was up at some point since the tick last looked
+       -- perhaps all through a Stop, when nothing looks -- so whatever the
+       count says is about a press that is over. Start it again, and have
+       BSP_McuSleep stay awake to finish it. Whether this is a press is the
+       debounce's to say, not the edge's. */
+    button_low_ms = 0u;
+    button_edge   = true;
   }
 }
 

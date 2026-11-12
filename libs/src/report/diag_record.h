@@ -19,11 +19,19 @@
 //   u  of those, how many found the module waiting to be paired
 //   m  the module's Wi-Fi state as the last of them closed, in hex: 02 no
 //      router, 03 router but no cloud, 04 cloud but the report was not
-//      confirmed, 00/01/06 pairing, ff the module never spoke
+//      confirmed, 00/01/06 pairing, 05 low power with no network (it offered
+//      pairing for three minutes and nobody took it up), ff the module never
+//      spoke
 //   s  cycles whose sensor read failed
+//   p  only after the Wi-Fi button opened a pairing window: how many did,
+//      then how the last one went (DiagPairing) and how many reset commands
+//      it sent -- "p=2t1" is two pairing windows, the last of which put the
+//      module into pairing at the first command and timed out with nobody
+//      finishing. Dropped rather than cut if the line is ever too long for it.
 //
 // It is only sent when there is something to say (Diag_IsNotable): after a
-// reset, or after windows or sensor reads failed. A normal report leaves it out.
+// reset, a pairing window, or after windows or sensor reads failed. A normal
+// report leaves it out.
 //
 // Kept in BSP_Retained words, which survive the Reset button, the watchdog and
 // a fault, but not a power-on. A checksum tells a record from what the RAM
@@ -42,15 +50,30 @@
 #define DIAG_TEXT_MAX 40u
 
 /* How many words Diag_Store fills. */
-#define DIAG_WORDS 3u
+#define DIAG_WORDS 4u
+
+/* How a pairing window went, as the letter in the `p` field. In the order a
+ * window gets through its steps: the module has to come alive, take the reset
+ * command, say it is pairing, and then be paired by somebody. */
+typedef enum {
+    DIAG_PAIRING_NONE,       /* -  no pairing window since the last report */
+    DIAG_PAIRING_SILENT,     /* n  the module never came alive, so was never asked */
+    DIAG_PAIRING_UNANSWERED, /* x  it never answered the reset command */
+    DIAG_PAIRING_IGNORED,    /* i  it answered, but never said it was pairing */
+    DIAG_PAIRING_UNFINISHED, /* t  it was pairing; the window ran out first */
+    DIAG_PAIRING_REACHED,    /* k  it was pairing, then reached the cloud */
+} DiagPairing;
 
 typedef struct {
-    uint16_t cycles;       /* saturates at 65535 */
-    uint16_t sensor_fails; /* saturates at 65535 */
-    uint8_t  windows;      /* saturates at 255 */
-    uint8_t  unpaired;     /* saturates at 255 */
-    uint8_t  module_state; /* or DIAG_STATE_NONE */
-    uint8_t  reset;        /* a BSP_ResetType, or DIAG_RESET_REPORTED */
+    uint16_t cycles;        /* saturates at 65535 */
+    uint16_t sensor_fails;  /* saturates at 65535 */
+    uint8_t  windows;       /* saturates at 255 */
+    uint8_t  unpaired;      /* saturates at 255 */
+    uint8_t  module_state;  /* or DIAG_STATE_NONE */
+    uint8_t  reset;         /* a BSP_ResetType, or DIAG_RESET_REPORTED */
+    uint8_t  pairings;      /* pairing windows; saturates at 255 */
+    uint8_t  pairing;       /* the last one's DiagPairing */
+    uint8_t  pairing_sends; /* the reset commands the last one sent */
 } DiagRecord;
 
 /* Nothing to say: no cycles, no failures, the reset reported. */
@@ -64,8 +87,13 @@ void Diag_CountCycle(DiagRecord* rec, bool have_reading);
  * reported in it. */
 void Diag_CountFailedWindow(DiagRecord* rec, bool unpaired, uint8_t module_state);
 
-/* Whether a report should carry the record: after a reset, or after windows
- * or sensor reads failed. */
+/* The Wi-Fi button opened a pairing window, which went as `outcome` and sent
+ * `sends` reset commands. Counted whether or not it reached the cloud: it is
+ * not a failed report window either way. */
+void Diag_CountPairing(DiagRecord* rec, DiagPairing outcome, uint8_t sends);
+
+/* Whether a report should carry the record: after a reset or a pairing window,
+ * or after windows or sensor reads failed. */
 bool Diag_IsNotable(const DiagRecord* rec);
 
 /* Into, and back out of, the retained words. Diag_Restore returns false for

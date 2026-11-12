@@ -40,11 +40,35 @@ void tuyaSdkMockSetWifiStateAfter(int calls, uint8_t state);
 int tuyaSdkMockServiceCalls(void);
 int tuyaSdkMockProtocolInitCalls(void);
 
-/* mcu_reset_wifi() calls, i.e. how many times the module was asked to pair.
- * Each one also restarts the scripted boot, as the real module restarts on
- * the reset command.
+/* mcu_reset_wifi() calls, i.e. how many times the module was asked to pair --
+ * including any tuyaSdkMockLoseResets threw away.
  */
 int tuyaSdkMockResetWifiCalls(void);
+
+/* --- How the module takes the reset command ------------------------------------ */
+
+typedef enum {
+    /* Answers on the next wifi_uart_service() pass, restarts, says it is
+     * pairing (AP_STATE) a few passes later, and then boots as scripted from
+     * there: a scripted cloud is somebody pairing it. The default. */
+    TUYA_MOCK_RESET_PAIRS,
+
+    /* Answers and restarts, but boots as scripted with no pairing in between:
+     * back on the network it had. */
+    TUYA_MOCK_RESET_IGNORED,
+
+    /* Never gets it: no answer, no restart, and its scripted boot carries on.
+     * The SDK's cached state is forgotten all the same, as the real
+     * mcu_reset_wifi() forgets it before it transmits. */
+    TUYA_MOCK_RESET_LOST,
+} TuyaSdkMockResetAnswer;
+
+/* How every reset command is taken from now on. Starts TUYA_MOCK_RESET_PAIRS. */
+void tuyaSdkMockSetResetAnswer(TuyaSdkMockResetAnswer answer);
+
+/* The next `count` reset commands are lost on the way, whatever the answer
+ * above; the ones after them are taken as it says. */
+void tuyaSdkMockLoseResets(int count);
 
 /* Bytes handed to uart_receive_input(), i.e. what the receive interrupt path
  * actually pushed into the SDK.

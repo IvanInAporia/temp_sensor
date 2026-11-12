@@ -64,6 +64,21 @@ _Static_assert(DIAG_WORDS <= BSP_RETAINED_WORDS, "the diagnostic record does not
  * minutes is already far longer than any successful pairing takes. */
 #define WIFI_PAIRING_TIMEOUT_MS (3u * 60u * 1000u)
 
+/* How long the module is given to answer the reset command that starts
+ * pairing, and how many times the command goes out before the window stops
+ * asking. The module answers the moment the command arrives, so silence for
+ * this long means it never got there, and sending it again is the only fix.
+ *
+ * Until 2026-11-12 it went once and nobody looked. A module that missed it
+ * just carried on to its old network, and the window closed as if it had
+ * paired: from the outside, a button that did nothing. Re-pairing took
+ * several presses, however long the button was held, which pointed at this
+ * command first. Whether the commands are what goes missing is what the `p`
+ * field of DP 104 (diag_record.h) now says. (Presses were being lost too, in
+ * windows: see BSP_Wifi_TakeButtonPress in bsp.h.) */
+#define WIFI_PAIRING_ANSWER_MS (2u * 1000u)
+#define WIFI_PAIRING_SENDS     3u
+
 /* How long the module is given to answer the report's synchronous temperature
  * (Tuya_ReportCachedDpsWithAck). The SDK's notes (protocol.h, item 14) say the
  * module answers with a refusal after 5 s when it cannot deliver, and that
@@ -82,11 +97,6 @@ _Static_assert(DIAG_WORDS <= BSP_RETAINED_WORDS, "the diagnostic record does not
  * starts being useful, not where it ends -- the app still has to finish
  * registering the device. */
 #define WIFI_PAIRING_DRAIN_MS (10u * 1000u)
-
-/* Long enough to outlast contact bounce on a plain switch to ground, short
- * enough to be invisible to whoever is holding it. Only ever paid on a cycle
- * that actually saw a press edge. */
-#define BUTTON_DEBOUNCE_MS 50u
 
 /* How long after a report window that never reached the cloud the next one may
  * open.
@@ -131,6 +141,16 @@ typedef enum {
     WINDOW_UNPAIRED,
 } WindowResult;
 
+/* What a window leaves for the diagnostic record, besides how it ended. */
+typedef struct {
+    /* The Wi-Fi state the module last reported. */
+    uint8_t module_state;
+
+    /* A pairing window's progress, and the reset commands it sent. */
+    DiagPairing pairing;
+    uint8_t     pairing_sends;
+} WindowNotes;
+
 /* Whether the module answers a synchronous report (Tuya_ReportCachedDpsWithAck)
  * -- not every module firmware does, and 3.0.93 has not been checked. */
 typedef enum {
@@ -171,9 +191,9 @@ static uint8_t report_retries_left;
  * clock to land five minutes on would miss the cycle five minutes on whenever
  * the failed one had started later than that one, and slip a whole period.
  *
- * A cycle the button brings forward shares the slot before it, so a report
- * window that fails in one -- possible only on a press the debounce rejects --
- * may be retried a little early. Harmless. */
+ * A cycle the button brings forward shares the slot before it. Its window is a
+ * pairing window, which leaves the hold alone (UpdateBackoff), so that costs
+ * nothing. */
 static uint32_t report_hold_until_ms;
 
 /* In RAM: a reset asks again. */
@@ -210,11 +230,12 @@ static Battery_SagTrend sag_trend;
  * the first. */
 static uint16_t previous_rest_mv;
 
+static uint8_t AskModuleToPair(void);
 static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv);
-static bool PairingRequested(void);
+static DiagPairing PairingOutcome(uint8_t sends, bool reached_cloud);
 static bool PushReport(bool have_reading, bool pairing);
 static bool ReportBackoffOver(void);
-static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, uint8_t* module_state);
+static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, WindowNotes* notes);
 static void SaveDiag(void);
 static void UpdateBackoff(WindowResult result, bool pairing);
 static void WaitForNextCycle(void);
@@ -273,10 +294,10 @@ void TempSensorRunCycle(void)
     BSP_Watchdog_Refresh();
 
     /* The button first, because a press is usually why this cycle is running at
-     * all: it ends the sleep early. Reading it here also means the debounce
-     * delay is paid before the sensor read rather than after, so a press
-     * cannot be missed while the HDC3020 converts. */
-    bool pairing = PairingRequested();
+     * all: it ends the sleep early, or it was made during the last window and
+     * kept the sleep from starting. Already debounced by the BSP
+     * (BSP_Wifi_TakeButtonPress), so there is nothing to wait for here. */
+    bool pairing = BSP_Wifi_TakeButtonPress();
 
     /* The battery next, while nothing else is powered. One NiMH cell feeding a
      * 3.3 V boost delivers roughly three times the module's current at the
@@ -367,8 +388,8 @@ void TempSensorRunCycle(void)
 
         Tuya_SetDiag(diag_text, diag_len);
 
-        uint8_t      module_state;
-        WindowResult result = RunWifiWindow(have_reading, pairing, temp_c10, battery_mv, &module_state);
+        WindowNotes  notes;
+        WindowResult result = RunWifiWindow(have_reading, pairing, temp_c10, battery_mv, &notes);
 
         UpdateBackoff(result, pairing);
 
@@ -381,7 +402,22 @@ void TempSensorRunCycle(void)
         {
             /* A pairing window nobody finished is not a failure to report:
              * the module spent it waiting for a phone. */
-            Diag_CountFailedWindow(&diag, result == WINDOW_UNPAIRED, module_state);
+            Diag_CountFailedWindow(&diag, result == WINDOW_UNPAIRED, notes.module_state);
+        }
+
+        if (pairing)
+        {
+            /* After the clear: the text this window carried was cached before
+             * it opened, so how it went is the next report's to say. Every
+             * attempt is told that way, including the one that gets through. */
+            Diag_CountPairing(&diag, notes.pairing, notes.pairing_sends);
+
+            /* Pressed again while it was open -- most likely because nothing
+             * on the board shows that the first press took. This window was
+             * that press's answer. Another would put a module that may have
+             * just paired back into pairing. A press during a report window,
+             * by contrast, is kept, and opens a pairing window when it ends. */
+            (void) BSP_Wifi_TakeButtonPress();
         }
     }
 
@@ -539,19 +575,67 @@ static bool PushReport(bool have_reading, bool pairing)
     return delivered;
 }
 
+/* Ask the module to pair, and make sure it heard: the reset command again
+ * whenever WIFI_PAIRING_ANSWER_MS passes with no answer, up to
+ * WIFI_PAIRING_SENDS in all. Returns how many went out. Requires
+ * Tuya_IsAlive().
+ *
+ * Asking again cannot cut a pairing short. Each command comes seconds after the
+ * one before, while the module is still restarting into pairing, and nobody
+ * pairs a module that fast.
+ */
+static uint8_t AskModuleToPair(void)
+{
+    uint8_t sends = 0u;
+
+    do
+    {
+        Tuya_StartPairing();
+        sends++;
+    } while (!Tuya_WaitUntil(Tuya_PairingAnswered, WIFI_PAIRING_ANSWER_MS) && (sends < WIFI_PAIRING_SENDS));
+
+    return sends;
+}
+
+/* How far a pairing window got, for DP 104: whether the module came alive
+ * (it was asked only if it did, so `sends` is 0 if not), took the command,
+ * said it was pairing, and then reached the cloud.
+ *
+ * "Reached the cloud" after pairing is usually someone pairing it. It is also
+ * what a module looks like if it restarted partway through and, as
+ * anti-misoperation mode does after a power cycle, went back to the network it
+ * had. The cell's sag in DP 101 and DP 103 is what tells those apart.
+ */
+static DiagPairing PairingOutcome(uint8_t sends, bool reached_cloud)
+{
+    if (sends == 0u)
+    {
+        return DIAG_PAIRING_SILENT;
+    }
+
+    if (Tuya_PairingEntered())
+    {
+        return reached_cloud ? DIAG_PAIRING_REACHED : DIAG_PAIRING_UNFINISHED;
+    }
+
+    return Tuya_PairingAnswered() ? DIAG_PAIRING_IGNORED : DIAG_PAIRING_UNANSWERED;
+}
+
 /* One report and/or pairing window, start to finish, and how it ended.
  * have_reading says this cycle read the sensor, and temp_c10 is then its
  * filtered temperature. rest_mv is this cycle's resting cell voltage, to set
- * the window's sag against. *module_state is set to the Wi-Fi state the module
- * last reported, for the diagnostic record.
+ * the window's sag against. *notes is filled in for the diagnostic record.
  *
  * Every step has a deadline and every exit path goes through Tuya_PowerOff(),
  * because leaving the module powered is the one mistake that empties the cell
  * outright -- tens of milliamps against a budget built on microamps.
  */
-static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, uint8_t* module_state)
+static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, WindowNotes* notes)
 {
-    WindowResult result = WINDOW_FAILED;
+    WindowResult result        = WINDOW_FAILED;
+    bool         reached_cloud = false;
+
+    notes->pairing_sends = 0u;
 
     /* The windows before this one: its own minimum is still to be measured.
      * Cached now, with the module still unpowered, like the readings. */
@@ -577,16 +661,18 @@ static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_
             {
                 /* Only now: this is a plain transmit, and one sent into a
                  * module that has not finished booting is simply lost. */
-                Tuya_StartPairing();
+                notes->pairing_sends = AskModuleToPair();
             }
 
             uint32_t cloud_timeout_ms = pairing ? WIFI_PAIRING_TIMEOUT_MS : WIFI_CLOUD_TIMEOUT_MS;
+
+            reached_cloud = Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms);
 
             /* The push is unconditional, not gated on a report being due: the
              * cloud is up and the cached readings are this cycle's, so a
              * pairing window pushes the current state too. That is what makes
              * the button confirm to whoever pressed it that the device works. */
-            if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms) && PushReport(have_reading, pairing))
+            if (reached_cloud && PushReport(have_reading, pairing))
             {
                 /* Committed only here, on the one path where the value reached
                  * the cloud. Every other way out of this function leaves the
@@ -611,7 +697,8 @@ static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_
     }
 
     /* Before the power goes: Tuya_PowerOn is what forgets it. */
-    *module_state = Tuya_WifiState();
+    notes->module_state = Tuya_WifiState();
+    notes->pairing      = pairing ? PairingOutcome(notes->pairing_sends, reached_cloud) : DIAG_PAIRING_NONE;
 
     Tuya_PowerOff();
 
@@ -656,27 +743,11 @@ static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv)
     return a_mv;
 }
 
-static bool PairingRequested(void)
-{
-    if (!BSP_Wifi_TakeButtonEvent())
-    {
-        return false;
-    }
-
-    /* An edge on its own is not a press. The pin is held up by the MCU's
-     * internal pull-up alone (25-65 kOhm), so it is a long antenna for
-     * anything the boost converter is doing, and the switch bounces besides.
-     * A real press is still down after the bounce has settled. */
-    BSP_DelayMs(BUTTON_DEBOUNCE_MS);
-
-    return BSP_Wifi_ButtonIsPressed();
-}
-
 /* Sleep until the next cycle is due, or until the button says otherwise.
  *
- * The sleep is broken up by anything that wakes the MCU, so this is a loop:
- * a wake that is not the button goes straight back to sleep for whatever is
- * left.
+ * A loop, for the schedule: a sleep that runs its length comes back here to
+ * advance it. Everything else that can wake the MCU the BSP sleeps through
+ * itself.
  */
 static void WaitForNextCycle(void)
 {
@@ -708,18 +779,11 @@ static void WaitForNextCycle(void)
             return;
         }
 
-        uint32_t slept_ms = BSP_McuSleep(remaining_ms);
-
-        /* Both halves matter. A short sleep says something woke the MCU that
-         * was not the clock, and the button is the only such source on this
-         * board; the level then says the press is real and still happening.
-         *
-         * Testing the level alone would also fire on a sleep that ran its full
-         * length with the button simply held down -- a stuck switch -- and
-         * would return with the schedule un-advanced, costing a wasted extra
-         * cycle every period for as long as it stayed stuck.
-         */
-        if ((slept_ms < remaining_ms) && BSP_Wifi_ButtonIsPressed())
+        /* Short only for a press the BSP has confirmed, and BSP_Wifi_TakeButtonPress
+         * will report: one made during this sleep, or before it, in the window
+         * just closed (bsp.h). A glitch on the pin is not one, and a stuck
+         * button is one press, not one per period. */
+        if (BSP_McuSleep(remaining_ms) < remaining_ms)
         {
             /* The press is why we are awake. Run the cycle now and leave the
              * schedule alone: the next scheduled cycle is still due when it

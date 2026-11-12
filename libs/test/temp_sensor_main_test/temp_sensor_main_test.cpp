@@ -141,6 +141,10 @@ protected:
     // in the app. AP_STATE is what the simulator capture shows.
     void ModuleIsUnpaired() { tuyaSdkMockSetWifiStateAfter(kBootCalls, AP_STATE); }
 
+    // Unpaired, and done offering pairing: asleep in low power. What the board
+    // flashed on 2026-11-12 reported (DP 104 m=05) until the button paired it.
+    void ModuleIsAsleep() { tuyaSdkMockSetWifiStateAfter(kBootCalls, WIFI_LOW_POWER); }
+
     int WindowsOpened() const { return bspMockWifiPowerOnCalls(); }
 
     void RunCycles(int n)
@@ -979,19 +983,6 @@ TEST_F(TempSensorMainTest, PairingWaitsForTheModuleBeforeAskingItToPair)
     EXPECT_EQ(0, tuyaSdkMockResetWifiCalls());
 }
 
-TEST_F(TempSensorMainTest, AButtonGlitchIsNotAPress)
-{
-    // The pin is held up by the MCU's internal pull-up alone, so it is a long
-    // antenna. An edge with no level behind it must not cost a window.
-    SettleAt(234);
-    int windows = WindowsOpened();
-
-    bspMockGlitchButton();
-    RunCycles(1);
-
-    EXPECT_EQ(windows, WindowsOpened());
-}
-
 TEST_F(TempSensorMainTest, APairingWindowAlsoPushesTheCurrentReadings)
 {
     // What makes the button confirm to whoever pressed it that the device
@@ -1030,27 +1021,26 @@ TEST_F(TempSensorMainTest, AButtonPressDoesNotDisturbTheMeasurementSchedule)
     SettleAt(234);
     uint32_t before = bspMockNowMs();
 
-    bspMockSetEarlyWake(1000u, 1); // the press ends the sleep after 1 s
-    bspMockPressButton();
+    // A cycle, and a press one second into the sleep after it.
+    bspMockPressButtonDuringNextSleep(1000u);
     ModuleReachesCloud();
     RunCycles(1);
-    bspMockReleaseButton();
 
     // The pairing cycle ran early, and then the loop went back to waiting out
     // the period that was already running -- so BOTH cycles fall inside one
     // period and the series keeps its phase. A press that re-based the
     // schedule would show up here as two periods.
-    RunCycles(1);
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
 
     EXPECT_NEAR(kCyclePeriodMs, bspMockNowMs() - before, 2000u);
 }
 
 TEST_F(TempSensorMainTest, AHeldButtonDoesNotCostAnExtraCycleEveryPeriod)
 {
-    // A stuck switch holds the level down forever but produces exactly one
-    // falling edge, so it must not keep looking like a fresh early wake. The
-    // sleep runs its full length; only a sleep that ended EARLY is a press
-    // worth returning on.
+    // A stuck switch holds the pin down forever. The BSP's debounce counts it
+    // once (button_debounce_test), and the one press it makes is spent on one
+    // pairing cycle. After that every sleep runs its full length.
     SettleAt(234);
     bspMockPressButton();
     ModuleReachesCloud();
@@ -1063,6 +1053,159 @@ TEST_F(TempSensorMainTest, AHeldButtonDoesNotCostAnExtraCycleEveryPeriod)
 
     EXPECT_EQ(sleeps_before + 4, bspMockSleepCalls());
     EXPECT_NEAR(4u * kCyclePeriodMs, bspMockNowMs() - before, 2000u);
+}
+
+// --- A press while a window is open ---------------------------------------------
+//
+// On 2026-11-12 a board paired after about four presses, and DP 104 showed only
+// one of them had opened a window. The board had been flashed, so its first
+// cycles ran ~29 s report windows, and until then a press made in one was gone
+// by the time the window closed. It is now kept until the application takes it.
+
+TEST_F(TempSensorMainTest, APressDuringAReportWindowOpensAPairingWindowRightAfter)
+{
+    SettleAt(234);
+    StageReading(280, 55u);
+    RunCycles(1); // one cycle of median lag
+
+    bspMockPressButtonDuringNextWindow();
+    ASSERT_EQ(1, WindowsDuring(1)); // the report, pressed during
+    uint32_t report_opened_ms = bspMockWifiLastPowerOnMs();
+    EXPECT_EQ(0, tuyaSdkMockResetWifiCalls());
+
+    ASSERT_EQ(1, WindowsDuring(1)); // pairing, with no sleep in between
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+    EXPECT_LT(bspMockWifiLastPowerOnMs() - report_opened_ms, 60u * 1000u);
+}
+
+TEST_F(TempSensorMainTest, APressDuringAPairingWindowIsDropped)
+{
+    // Pressing again while it is open -- nothing on the board shows that the
+    // first press took -- must not open a second one after it: that would put
+    // a module that may have just paired back into pairing.
+    SettleAt(234);
+    ModuleIsUnpaired(); // nobody pairs it, so the window runs its 3 min
+
+    bspMockPressButton();
+    bspMockPressButtonDuringNextWindow();
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+
+    uint32_t before = bspMockNowMs();
+    EXPECT_EQ(0, WindowsDuring(3));
+    EXPECT_EQ(1, tuyaSdkMockResetWifiCalls());
+    EXPECT_NEAR(3u * kCyclePeriodMs, bspMockNowMs() - before, 2000u); // full sleeps between them
+}
+
+// --- Making sure the module heard ----------------------------------------------
+//
+// Re-pairing took several presses, however long the button was held. The reset
+// command that starts pairing went out once, and a module that missed it
+// carried on to its old network -- and the window closed as if it had paired.
+// So the command now goes again while the module does not answer it, and the
+// report after a pairing window says how far that window got (the `p` field of
+// DP 104, diag_record.h).
+
+// The p field of a DP 104 text, or "" if it has none.
+std::string PairingField(const std::string& dp104)
+{
+    std::string::size_type at = dp104.find(" p=");
+    return (at == std::string::npos) ? std::string() : dp104.substr(at + 1);
+}
+
+TEST_F(TempSensorMainTest, APairingWindowMakesSureTheModuleHeardAndSaysHowItWent)
+{
+    struct Row {
+        const char*           story;
+        std::function<void()> module; // how the module takes the press
+        int                   resets; // reset commands the window sent
+        const char*           p;      // the p field of the report after it
+    };
+
+    const Row rows[] = {
+        {"it answers, pairs, and the phone finishes",
+         [this] { ModuleReachesCloud(); },
+         1, "p=1k1"},
+        {"it answers and pairs; nobody finishes",
+         [this] { ModuleIsUnpaired(); },
+         1, "p=1t1"},
+        {"the first command is lost, the second gets there",
+         [this] { ModuleReachesCloud(); tuyaSdkMockLoseResets(1); },
+         2, "p=1k2"},
+        {"the first two are lost, the last gets there",
+         [this] { ModuleReachesCloud(); tuyaSdkMockLoseResets(2); },
+         3, "p=1k3"},
+        {"every one is lost",
+         [this] { ModuleReachesCloud(); tuyaSdkMockSetResetAnswer(TUYA_MOCK_RESET_LOST); },
+         3, "p=1x3"},
+        {"every one is lost by a module already pairing before them",
+         [this] { ModuleIsUnpaired(); tuyaSdkMockSetResetAnswer(TUYA_MOCK_RESET_LOST); },
+         3, "p=1x3"},
+        {"it answers, then goes back to its old network",
+         [this] { ModuleReachesCloud(); tuyaSdkMockSetResetAnswer(TUYA_MOCK_RESET_IGNORED); },
+         1, "p=1i1"},
+        {"it answers, then goes back to sleep: no network, but not pairing",
+         [this] { ModuleIsAsleep(); tuyaSdkMockSetResetAnswer(TUYA_MOCK_RESET_IGNORED); },
+         1, "p=1i1"},
+        {"it never comes alive, so is never asked",
+         [this] { ModuleNeverAnswers(); },
+         0, "p=1n0"},
+    };
+
+    for (const Row& row : rows)
+    {
+        PowerOn();
+        SettleAt(234);
+
+        row.module();
+        bspMockPressButton();
+        ASSERT_EQ(1, WindowsDuring(1)) << row.story;
+        bspMockReleaseButton();
+
+        EXPECT_EQ(row.resets, tuyaSdkMockResetWifiCalls()) << row.story;
+        EXPECT_LT(bspMockWifiLastWindowMs(), kCyclePeriodMs) << row.story;
+
+        // The next report carries it.
+        ModuleReachesCloud();
+        StageReading(280, 55u);
+        int strings_before = tuyaSdkMockStringCount();
+        ASSERT_EQ(1, WindowsDuring(2)) << row.story;
+        EXPECT_EQ(row.p, PairingField(DiagSentSince(strings_before))) << row.story;
+    }
+}
+
+TEST_F(TempSensorMainTest, EveryPairingAttemptIsToldInTheReportsThatFollow)
+{
+    // Two presses that put the module into pairing with nobody to finish, then
+    // one that gets through. The window that got through carries the two
+    // before it, and the report after it carries that one.
+    SettleAt(234);
+    ModuleIsUnpaired();
+
+    for (int press = 0; press < 2; press++)
+    {
+        bspMockPressButton();
+        ASSERT_EQ(1, WindowsDuring(1));
+        bspMockReleaseButton();
+    }
+
+    ModuleReachesCloud();
+    int strings_before = tuyaSdkMockStringCount();
+    bspMockPressButton();
+    ASSERT_EQ(1, WindowsDuring(1));
+    bspMockReleaseButton();
+    EXPECT_EQ("p=2t1", PairingField(DiagSentSince(strings_before)));
+
+    StageReading(280, 55u);
+    strings_before = tuyaSdkMockStringCount();
+    ASSERT_EQ(1, WindowsDuring(2));
+    EXPECT_EQ("p=1k1", PairingField(DiagSentSince(strings_before)));
+
+    // ...and after that, nothing more to say.
+    StageReading(234, 55u);
+    strings_before = tuyaSdkMockStringCount();
+    ASSERT_EQ(1, WindowsDuring(2));
+    EXPECT_EQ("", DiagSentSince(strings_before));
 }
 
 // --- Failures -------------------------------------------------------------
@@ -1370,11 +1513,13 @@ TEST_F(TempSensorMainTest, AModuleThatComesBackOnItsNetworkIsHeardFromAtTheNextC
     EXPECT_EQ(1, WindowsDuring(2));
 }
 
-TEST_F(TempSensorMainTest, AnyOfThePairingModesCountsAsUnpaired)
+TEST_F(TempSensorMainTest, EveryStateWithNoNetworkCountsAsUnpaired)
 {
-    // Which one the module reports depends on how it was set to pair:
-    // SmartConfig, AP, or both at once.
-    const uint8_t states[] = {SMART_CONFIG_STATE, AP_STATE, SMART_AND_AP_STATE};
+    // Which pairing state the module reports depends on how it was set to
+    // pair: SmartConfig, AP, or both at once. Low power is where it goes after
+    // three minutes of that with nobody pairing it -- still no network, so
+    // still no point waiting for the cloud.
+    const uint8_t states[] = {SMART_CONFIG_STATE, AP_STATE, SMART_AND_AP_STATE, WIFI_LOW_POWER};
 
     for (uint8_t state : states)
     {
@@ -1750,12 +1895,19 @@ TEST_F(TempSensorMainTest, TheDiagnosticDpSaysWhatHappenedSinceTheLastReport)
          [this] { ModuleReachesCloud(); RunCycles(kCyclesPerPause); },
          "r=- c=28 w=1 u=1 m=01 s=0"},
 
+        // The board flashed on 2026-11-12 read "w=2 u=0 m=05": asleep, and
+        // taken for a router that was down.
+        {"a window that found the module asleep in low power",
+         [this] { SettleAt(234); ModuleIsAsleep(); StageReading(280, 55u); RunCycles(2); },
+         [this] { ModuleReachesCloud(); RunCycles(kCyclesPerPause); },
+         "r=- c=28 w=1 u=1 m=05 s=0"},
+
         {"a module that never spoke",
          [this] { SettleAt(234); ModuleNeverAnswers(); StageReading(280, 55u); RunCycles(2); },
          [this] { ModuleReachesCloud(); RunCycles(1); },
          "r=- c=5 w=1 u=0 m=ff s=0"},
 
-        {"a pairing window nobody finished: not a failure to report",
+        {"a pairing window nobody finished: not a failed window, but told",
          [this] {
              SettleAt(234);
              ModuleIsUnpaired();
@@ -1764,7 +1916,7 @@ TEST_F(TempSensorMainTest, TheDiagnosticDpSaysWhatHappenedSinceTheLastReport)
              bspMockReleaseButton();
          },
          [this] { ModuleReachesCloud(); StageReading(280, 55u); RunCycles(2); },
-         ""},
+         "r=- c=5 w=0 u=0 m=ff s=0 p=1t1"},
 
         {"two sensor reads that failed",
          [this] { SettleAt(234); bspMockSensorSetReadFails(true); RunCycles(2); bspMockSensorSetReadFails(false); },
@@ -1786,7 +1938,7 @@ TEST_F(TempSensorMainTest, TheDiagnosticDpSaysWhatHappenedSinceTheLastReport)
         {"a power-on: the record is gone with the power",
          [this] { PausedAfterThreeFailures(); RunCycles(10); },
          [this] {
-             for (uint8_t i = 0; i < 3; i++) bspMockSetRetained(i, 0u);
+             for (uint8_t i = 0; i < BSP_RETAINED_WORDS; i++) bspMockSetRetained(i, 0u);
              ResetKeepingPower(BSP_Reset_PowerOn); ModuleReachesCloud(); RunCycles(1);
          },
          "r=por c=1 w=0 u=0 m=ff s=0"},

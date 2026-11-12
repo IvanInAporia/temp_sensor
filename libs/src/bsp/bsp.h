@@ -84,10 +84,14 @@ void BSP_Idle(void);
 /* Sleep the microcontroller for minimum power usage, for up to
  * `sleep_time_ms`, and return the milliseconds actually slept.
  *
- * The return value is not decoration: the Wi-Fi button is a wake source, so a
- * sleep can end early, and the caller paces the next cycle off what really
- * elapsed rather than off what it asked for (temp_sensor_main.c). An
- * implementation with no early wake source may simply return `sleep_time_ms`.
+ * The return value is not decoration: a press of the Wi-Fi button ends a sleep
+ * early, and the caller paces the next cycle off what really elapsed rather
+ * than off what it asked for (temp_sensor_main.c). That is the only thing that
+ * does. The press has to be one BSP_Wifi_TakeButtonPress() will report, and one
+ * already waiting when this is called ends the sleep before it starts. Any
+ * other wake, and an edge on the button that turns out not to be a press, the
+ * implementation sleeps through itself. An implementation with no button may
+ * simply return `sleep_time_ms`.
  *
  * BSP_GetTimeMs() is advanced by the same amount before this returns.
  *
@@ -126,7 +130,7 @@ void BSP_Watchdog_Refresh(void);
  * whoever stores something here must be able to tell (diag_record.c checks a
  * checksum).
  */
-#define BSP_RETAINED_WORDS 3u
+#define BSP_RETAINED_WORDS 4u
 
 uint32_t BSP_Retained_Read(uint8_t index);
 void     BSP_Retained_Write(uint8_t index, uint32_t value);
@@ -215,24 +219,25 @@ void BSP_Wifi_AbortReceive(void);
  */
 void BSP_Wifi_SetRxErrorCallback(BSP_void_callback_t cb);
 
-/* Consume the latched "button went down" event: true if a press edge has been
- * seen since the last call, and clears the latch either way.
+/* Consume a press of the Wi-Fi button: true if one has been made since the last
+ * call, and clears it either way.
  *
- * Latched rather than polled because the press is also what ends a
- * BSP_McuSleep -- it has to be, or the button would do nothing for the minutes
- * between cycles -- and the application only gets to look once it is running
- * again. An edge that was not latched somewhere would be gone by then.
- */
-bool BSP_Wifi_TakeButtonEvent(void);
-
-/* True while the button is held down.
+ * A press is the pin held down for BUTTON_DEBOUNCE_MS without a break
+ * (button_debounce.h). Contact bounce and noise pulses on a pin held up only by
+ * the MCU's weak internal pull-up never get that far, and a held or stuck
+ * button is one press, not one per sample.
  *
- * The level behind the event above, so the application can confirm that a
- * latched edge was a real press and not contact bounce or a noise pulse on a
- * pin held up only by the MCU's weak internal pull-up. Debouncing is the
- * application's job (temp_sensor_main.c), not the BSP's.
+ * Judged here, not by the application, because a press has to be watched while
+ * it happens, whatever the MCU is doing then. Asleep, the edge wakes it, and
+ * BSP_McuSleep stays awake until the press is decided. Awake -- the sensor
+ * read, or minutes into a Wi-Fi window -- it is sampled every millisecond, and
+ * kept until the application next asks. A press made during a window is no
+ * longer gone by the time the window ends.
+ *
+ * A button held down through a reset counts as a press too. That is the quick
+ * way to re-pair: the first cycle after the reset pairs instead of reporting.
  */
-bool BSP_Wifi_ButtonIsPressed(void);
+bool BSP_Wifi_TakeButtonPress(void);
 
 /* --- Battery ----------------------------------------------------------------
  *
