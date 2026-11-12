@@ -489,11 +489,12 @@ void Wifi_RailOff(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+  /* A HAL call that failed.  Most of these are init, but SystemClock_Config()
+     runs again after every Stop (BSP_McuSleep), so this is reachable in the
+     field.  The generated spin, with interrupts off, was a dead board until
+     somebody pressed Reset; resetting at least tries again, and the next run
+     reports it as a fault (DP 104, r=flt). */
+  BSP_FatalReset();
   /* USER CODE END Error_Handler_Debug */
 }
 

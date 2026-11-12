@@ -228,7 +228,10 @@ The MCU can call mcu_get_green_time() function to initiate time calibration afte
 2) Each transmission will have a response from the module. Multiple reports cannot be made before the WIFI module responds;
 3) If the network is poor and data cannot be reported in time, the module will return failure after 5 seconds. The MCU needs to wait more than 5 seconds.
 ******************************************************************************/
-//#define         MCU_DP_UPLOAD_SYN                   //Enable synchronous status reporting function
+/* PORTED: enabled for the temperature report that the cycle waits on
+   (Tuya_ReportCachedDpsWithAck, tuya_link.c).  Only that one push is
+   synchronous; the answers to the module's own queries stay plain. */
+#define         MCU_DP_UPLOAD_SYN                   //Enable synchronous status reporting function
 
 /******************************************************************************
                       15: Does the MCU need to enable infrared status notification function?
@@ -394,6 +397,13 @@ May need to appropriately increase send and receive buffer sizes.
    rather than the lowest single reading (Battery_SagSamples, battery.c). */
 //Lowest averaged battery voltage under load(Only report)
 #define DPID_BATTERY_AVG_MIN_VOLTAGE 103
+/* PORTED: added by hand, like 101.  Platform DP: ID 104, identifier
+   diagnostics, String, report only, max length 40.  What the device went
+   through since its last report got through -- resets, failed windows,
+   failed sensor reads -- as one line of text (diag_record.h).  Sent only when
+   there is something to say. */
+//Diagnostics since the last delivered report(Only report)
+#define DPID_DIAG 104
 
 #endif
 

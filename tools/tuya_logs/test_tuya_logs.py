@@ -85,21 +85,24 @@ class ShowTest(unittest.TestCase):
 
 
 class ReportCellsTest(unittest.TestCase):
-    # Columns:           min mV  avg mV  batt %  state   damaged  temp C  rh %
+    # Columns:           min mV  avg mV  batt %  state   damaged  temp C  rh %  diag
     TABLE = [
         # DP instruction mode: the product's identifiers, DP 101's misspelled.
         ({"batter_min_voltage": "391", "battery_avg_min_voltage": "1283", "battery_percentage": "83",
           "battery_state": "high", "battery_damaged": "false", "temp_current": "201", "humidity_value": "58"},
-                             ["391", "1283", "83",   "high", "off",   "20.1", "58"]),
-        # Standard instruction mode: Tuya's names, no 101-103.
+                             ["391", "1283", "83",   "high", "off",   "20.1", "58", "."]),
+        # Standard instruction mode: Tuya's names, no 101-104.
         ({"battery_percentage": "83", "battery_state": "high", "va_temperature": "201", "va_humidity": "58"},
-                             [".",   ".",    "83",   "high", ".",     "20.1", "58"]),
+                             [".",   ".",    "83",   "high", ".",     "20.1", "58", "."]),
         # The spelling in tuya/protocol.h, should the platform's ever be fixed.
         ({"battery_min_voltage": "400"},
-                             ["400", ".",    ".",    ".",    ".",     ".",    "."]),
+                             ["400", ".",    ".",    ".",    ".",     ".",    ".",  "."]),
         # Both names in one report: the product's wins.
         ({"temp_current": "201", "va_temperature": "199"},
-                             [".",   ".",    ".",    ".",    ".",     "20.1", "."]),
+                             [".",   ".",    ".",    ".",    ".",     "20.1", ".",  "."]),
+        # DP 104, as the firmware words it, passed through unchanged.
+        ({"temp_current": "224", "diagnostics": "r=pin c=108 w=4 u=0 m=02 s=0"},
+                             [".",   ".",    ".",    ".",    ".",     "22.4", ".",  "r=pin c=108 w=4 u=0 m=02 s=0"]),
     ]
 
     def test_table(self):
@@ -251,14 +254,14 @@ class RunTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("front: 2 new report(s); last report 2026-11-06 21:35, 10.4 h ago\n", out)
         self.assertIn(
-            "  time               min mV   avg mV   batt %    state  damaged   temp C     rh %\n"
-            "  2026-11-06 21:21      391      697       76     high      off     21.3       48\n"
-            "  2026-11-06 21:35      386      687        0      low       on     21.3       48\n", out)
+            "  time               min mV   avg mV   batt %    state  damaged   temp C     rh %     diag\n"
+            "  2026-11-06 21:21      391      697       76     high      off     21.3       48        .\n"
+            "  2026-11-06 21:35      386      687        0      low       on     21.3       48        .\n", out)
         self.assertNotIn("WARNING", out)
         self.assertEqual((self.dir / "front_reports.csv").read_text(),
-            "time,min mV,avg mV,batt %,state,damaged,temp C,rh %\n"
-            "2026-11-06 21:21,391,697,76,high,off,21.3,48\n"
-            "2026-11-06 21:35,386,687,0,low,on,21.3,48\n")
+            "time,min mV,avg mV,batt %,state,damaged,temp C,rh %,diag\n"
+            "2026-11-06 21:21,391,697,76,high,off,21.3,48,.\n"
+            "2026-11-06 21:35,386,687,0,low,on,21.3,48,.\n")
         self.assertEqual(len(tl.read_raw(self.dir / "front_raw.csv")), 14)
         # v2 was refused once, then iot-03 was used first for every later day.
         self.assertEqual(sum(p.startswith("/v2.0/") for p in fake.calls), 1)
@@ -269,7 +272,7 @@ class RunTest(unittest.TestCase):
 
         self.assertIn("front: 1 new report(s); last report 2026-11-09 10:00, 22.0 h ago\n", out)
         self.assertNotIn("2026-11-06 21:21", out)
-        self.assertIn("  2026-11-09 10:00      402     1041       98     high      off     21.3       48\n", out)
+        self.assertIn("  2026-11-09 10:00      402     1041       98     high      off     21.3       48        .\n", out)
         self.assertEqual(len(tl.read_raw(self.dir / "front_raw.csv")), 21)   # nothing stored twice
         self.assertEqual((self.dir / "front_reports.csv").read_text().count("\n"), 4)
 
@@ -281,7 +284,7 @@ class RunTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("  WARNING: DPs 101-103 are not visible to this cloud project", out)
-        self.assertIn("  2026-11-07 10:00        .        .       83     high        .     21.3       48\n", out)
+        self.assertIn("  2026-11-07 10:00        .        .       83     high        .     21.3       48        .\n", out)
         self.assertNotIn("/v1.0/iot-03/devices/dev1/report-logs", fake.calls)   # v2 accepted the codes
 
     def test_specification_unreadable(self):
@@ -292,7 +295,7 @@ class RunTest(unittest.TestCase):
         code, out = self.run_at("2026-11-07 12:00:00", fake)
 
         self.assertEqual(code, 0)
-        self.assertIn("  2026-11-07 10:00        .        .       83     high        .     21.3       48\n", out)
+        self.assertIn("  2026-11-07 10:00        .        .       83     high        .     21.3       48        .\n", out)
         self.assertNotIn("WARNING", out)   # cannot tell which mode it is
 
     def test_paging(self):

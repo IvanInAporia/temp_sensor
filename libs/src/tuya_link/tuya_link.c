@@ -1,9 +1,18 @@
 #include "tuya_link.h"
 
 #include "bsp.h"
-#include "mcu_api.h"
+#include "diag_record.h"
+
+/* protocol.h ahead of mcu_api.h: it holds the switches mcu_api.h tests, and
+ * mcu_api.h does not include it. Behind it, MCU_DP_UPLOAD_SYN is undefined and
+ * the synchronous senders are not declared. */
 #include "protocol.h"
+#include "mcu_api.h"
 #include "wifi.h"
+
+/* A string DP is built in the SDK's send buffer with no bounds check: four
+ * bytes of DP header and then the text. */
+_Static_assert(4u + DIAG_TEXT_MAX <= WIFIR_UART_SEND_BUF_LMT, "DP 104 overruns the SDK's send buffer");
 
 /* The byte the receive interrupt lands in. One byte, permanently re-armed: see
  * BSP_Wifi_Receive. */
@@ -27,6 +36,18 @@ static struct {
  * only, like the set. */
 static uint16_t battery_min_mv;
 static uint16_t battery_average_min_mv;
+
+/* DP 104, or diag_len 0 for none. Written between windows only. */
+static char    diag_text[DIAG_TEXT_MAX];
+static uint8_t diag_len;
+
+/* The synchronous push: how many answers it asked for (0 before one has gone
+ * out), how many are in, and whether any was a refusal. Reset by every push
+ * and every Tuya_PowerOn, so an answer can only count in the window that
+ * asked. */
+static uint8_t acks_expected;
+static uint8_t acks_received;
+static bool    ack_refused;
 
 /* DP 101 goes out only below this. Above it the boost still has plenty of
  * margin, and the DP would only add noise to the app's history. */
@@ -68,6 +89,10 @@ void Tuya_Init(void)
     dps.valid              = false;
     battery_min_mv         = 0u;
     battery_average_min_mv = 0u;
+    diag_len               = 0u;
+    acks_expected          = 0u;
+    acks_received          = 0u;
+    ack_refused            = false;
 
     BSP_Wifi_SetRxErrorCallback(OnRxError);
 
@@ -90,6 +115,11 @@ void Tuya_PowerOn(void)
      * cycle believe the module was already connected while it was still
      * booting. */
     wifi_protocol_init();
+
+    /* No answer from an earlier window counts in this one. */
+    acks_expected = 0u;
+    acks_received = 0u;
+    ack_refused   = false;
 
     /* Armed last, so nothing can land in the ring between the reset above and
      * the receiver being ready for it. The module's own boot takes tens of
@@ -118,6 +148,8 @@ bool Tuya_WaitUntil(bool (*condition)(void), uint32_t timeout_ms)
 
     for (;;)
     {
+        BSP_Watchdog_Refresh();
+
         Tuya_Service();
 
         /* Tested after the service call, so a condition that the bytes just
@@ -167,6 +199,11 @@ bool Tuya_IsUnpaired(void)
     return (state == SMART_CONFIG_STATE) || (state == AP_STATE) || (state == SMART_AND_AP_STATE);
 }
 
+uint8_t Tuya_WifiState(void)
+{
+    return mcu_get_wifi_work_state();
+}
+
 void Tuya_StartPairing(void)
 {
     /* Reset (0x04), not "reset and select mode" (0x05): 0x05 picks between the
@@ -200,7 +237,30 @@ void Tuya_SetBatteryMinMv(uint16_t min_mv, uint16_t average_min_mv)
     battery_average_min_mv = average_min_mv;
 }
 
-void Tuya_ReportCachedDps(void)
+void Tuya_SetDiag(const char* text, uint8_t len)
+{
+    if (len > DIAG_TEXT_MAX)
+    {
+        len = DIAG_TEXT_MAX;
+    }
+
+    for (uint8_t i = 0u; i < len; i++)
+    {
+        diag_text[i] = text[i];
+    }
+
+    diag_len = len;
+}
+
+/* Both pushes. `with_ack` sends the temperature, last, as a synchronous
+ * report, and expects its answer.
+ *
+ * One synchronous report, not one per reading: the SDK's own notes
+ * (protocol.h, item 14) say no second one may go out before the module has
+ * answered the first, and the module takes up to 5 s to answer when the
+ * network is poor. The temperature goes last so that its answer covers
+ * everything sent before it on the same connection. */
+static void ReportDps(bool with_ack)
 {
     /* First, because they do not depend on the reading set below. */
     if ((battery_min_mv != 0u) && (battery_min_mv < BATTERY_MIN_REPORT_BELOW_MV))
@@ -215,6 +275,11 @@ void Tuya_ReportCachedDps(void)
         (void) mcu_dp_value_update(DPID_BATTERY_AVG_MIN_VOLTAGE, (u32) battery_average_min_mv);
     }
 
+    if (diag_len != 0u)
+    {
+        (void) mcu_dp_string_update(DPID_DIAG, (const u8*) diag_text, diag_len);
+    }
+
     if (!dps.valid)
     {
         /* The module can query before this device has measured anything --
@@ -225,13 +290,6 @@ void Tuya_ReportCachedDps(void)
         return;
     }
 
-    /* DP 1 is a signed value with range -200..600, i.e. 0.1 C units, which is
-     * exactly what temp_c10 already is -- no scaling here. Cast through int32
-     * so a sub-zero temperature sign-extends to all 32 bits before
-     * mcu_dp_value_update() takes it apart; the cloud reads the four bytes as
-     * a two's-complement int32. */
-    (void) mcu_dp_value_update(DPID_TEMP_CURRENT, (u32) (int32_t) dps.temp_c10);
-
     (void) mcu_dp_value_update(DPID_HUMIDITY_VALUE, (u32) dps.rh_pct);
     (void) mcu_dp_enum_update(DPID_BATTERY_STATE, (u8) dps.battery_state);
     (void) mcu_dp_value_update(DPID_BATTERY_PERCENTAGE, (u32) dps.battery_pct);
@@ -239,4 +297,59 @@ void Tuya_ReportCachedDps(void)
     /* Sent false as well as true, so the app clears the flag once a good cell
      * goes in. */
     (void) mcu_dp_bool_update(DPID_BATTERY_DAMAGED, dps.battery_damaged ? 1u : 0u);
+
+    /* DP 1 is a signed value with range -200..600, i.e. 0.1 C units, which is
+     * exactly what temp_c10 already is -- no scaling here. Cast through int32
+     * so a sub-zero temperature sign-extends to all 32 bits before
+     * mcu_dp_value_update() takes it apart; the cloud reads the four bytes as
+     * a two's-complement int32. */
+    u32 temp_wire = (u32) (int32_t) dps.temp_c10;
+
+    if (!with_ack)
+    {
+        (void) mcu_dp_value_update(DPID_TEMP_CURRENT, temp_wire);
+
+        return;
+    }
+
+    /* Before sending: the answer can come back from inside the next service
+     * pass, and must find the count ready for it. */
+    acks_expected = 1u;
+    acks_received = 0u;
+    ack_refused   = false;
+
+    (void) mcu_dp_value_update_syn(DPID_TEMP_CURRENT, temp_wire);
+}
+
+void Tuya_ReportCachedDps(void)
+{
+    ReportDps(false);
+}
+
+void Tuya_ReportCachedDpsWithAck(void)
+{
+    ReportDps(true);
+}
+
+bool Tuya_ReportAnswered(void)
+{
+    return (acks_expected != 0u) && (acks_received >= acks_expected);
+}
+
+bool Tuya_ReportConfirmed(void)
+{
+    return Tuya_ReportAnswered() && !ack_refused;
+}
+
+void Tuya_OnSyncResult(uint8_t result)
+{
+    if (acks_received < UINT8_MAX)
+    {
+        acks_received++;
+    }
+
+    if (result == 0u)
+    {
+        ack_refused = true;
+    }
 }

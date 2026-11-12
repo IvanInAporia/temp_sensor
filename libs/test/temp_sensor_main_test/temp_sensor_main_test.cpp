@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <functional>
 #include <initializer_list>
+#include <string>
 
 extern "C" {
 #include "battery.h"
+#include "bsp.h"
 #include "bsp_mock.h"
 #include "protocol.h"
 #include "report_policy.h"
@@ -82,7 +85,11 @@ struct ReportRow {
 
 class TempSensorMainTest : public ::testing::Test {
 protected:
-    void SetUp() override
+    void SetUp() override { PowerOn(); }
+
+    // A fresh board: everything the mocks hold is reset, the retained words
+    // with it, and the firmware starts. Also how a table row starts over.
+    void PowerOn()
     {
         bspMockReset();
         tuyaSdkMockReset();
@@ -91,6 +98,23 @@ protected:
         StageReading(234, 55u);     // 23.4 C, 55 %
 
         TempSensorInit();
+    }
+
+    // A reset that keeps the power on -- the Reset button, the watchdog, a
+    // fault: the firmware starts over, the mocks (the board, the module, the
+    // retained words) carry on.
+    void ResetKeepingPower(BSP_ResetType reason)
+    {
+        bspMockSetResetReason(reason);
+        TempSensorInit();
+    }
+
+    // The DP 104 text of the last string DP sent after `strings_before` were,
+    // or "" if none was.
+    std::string DiagSentSince(int strings_before) const
+    {
+        int count = tuyaSdkMockStringCount();
+        return (count > strings_before) ? std::string(tuyaSdkMockStringAt(count - 1)) : std::string();
     }
 
     // What the sensor answers with from now on.
@@ -1265,6 +1289,10 @@ TEST_F(TempSensorMainTest, ALateWakeDoesNotPushTheRetryACycleLater)
 // A module that was never paired, or was removed in the app, has no network to
 // try. A report window would wait out the whole cloud timeout for nothing, and
 // until the first report after boot lands, one is due on every cycle.
+//
+// So a window that finds it unpaired ends at once and the next waits out the
+// pause -- but the next does come. Until 2026-11 it never did: one unpaired
+// answer silenced the device until someone pressed Reset.
 
 TEST_F(TempSensorMainTest, AReportWindowEndsAsSoonAsTheModuleSaysItIsUnpaired)
 {
@@ -1277,20 +1305,28 @@ TEST_F(TempSensorMainTest, AReportWindowEndsAsSoonAsTheModuleSaysItIsUnpaired)
     EXPECT_FALSE(bspMockWifiIsPowered());
 }
 
-TEST_F(TempSensorMainTest, AnUnpairedDeviceOpensNoMoreReportWindows)
+TEST_F(TempSensorMainTest, AnUnpairedDeviceAsksAgainEveryTwoHours)
 {
-    // Not even the retries after boot, which the backoff alone would still
-    // allow about 12 times a day.
+    // Not on every cycle, as the policy keeps asking until the first report
+    // after boot lands, and without the two quick retries a down router gets:
+    // it will not have been paired five minutes later.
     ModuleIsUnpaired();
     ASSERT_EQ(1, WindowsDuring(1));
+    uint32_t first_ms = bspMockWifiLastPowerOnMs();
 
     int reads_before = bspMockSensorWriteCalls();
 
-    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
-    EXPECT_EQ(reads_before + kCyclesPerDay, bspMockSensorWriteCalls()); // still measuring
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(first_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+    EXPECT_LT(bspMockWifiLastWindowMs(), 1000u); // still short
+
+    // About 12 short windows a day, and the measuring carries on throughout.
+    EXPECT_EQ(12, WindowsDuring(kCyclesPerDay));
+    EXPECT_EQ(reads_before + kCyclesPerPause + kCyclesPerDay, bspMockSensorWriteCalls());
 }
 
-TEST_F(TempSensorMainTest, ADeviceRemovedInTheAppStopsReporting)
+TEST_F(TempSensorMainTest, ADeviceRemovedInTheAppChecksBackEveryTwoHours)
 {
     SettleAt(234);
 
@@ -1300,10 +1336,38 @@ TEST_F(TempSensorMainTest, ADeviceRemovedInTheAppStopsReporting)
     StageReading(280, 55u);
     ASSERT_EQ(1, WindowsDuring(2)); // one cycle of median lag, then the report
     EXPECT_LT(bspMockWifiLastWindowMs(), 1000u);
+    uint32_t found_ms = bspMockWifiLastPowerOnMs();
 
-    // ...and no change after it opens another.
+    // ...and no change opens another before the pause is out.
     StageReading(320, 55u);
-    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(found_ms + kPauseMs, bspMockWifiLastPowerOnMs());
+}
+
+TEST_F(TempSensorMainTest, AModuleThatComesBackOnItsNetworkIsHeardFromAtTheNextCheck)
+{
+    // The case that used to need the Reset button: the module answers one boot
+    // as if it were unpaired, and the next as if nothing had happened.
+    SettleAt(234);
+
+    ModuleIsUnpaired();
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+
+    ModuleReachesCloud();
+
+    // The change is still outstanding, and goes out at the next check...
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 1));
+    ASSERT_EQ(1, WindowsDuring(1));
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_TEMP_CURRENT, &value));
+    EXPECT_NEAR(280, static_cast<int32_t>(value), 1);
+
+    // ...and from then on a change goes out as usual.
+    StageReading(330, 55u);
+    EXPECT_EQ(1, WindowsDuring(2));
 }
 
 TEST_F(TempSensorMainTest, AnyOfThePairingModesCountsAsUnpaired)
@@ -1333,16 +1397,23 @@ TEST_F(TempSensorMainTest, APairingWindowIsNotCutShortByAnUnpairedModule)
     EXPECT_GE(bspMockWifiLastWindowMs(), 3u * 60u * 1000u); // the whole pairing timeout
 }
 
-TEST_F(TempSensorMainTest, APairingWindowNobodyFinishesLeavesTheDeviceUnpaired)
+TEST_F(TempSensorMainTest, APairingWindowNobodyFinishesChangesNothing)
 {
+    // The pause that the unpaired answer started runs on as it would have: the
+    // pairing window neither ends it nor starts it over.
     ModuleIsUnpaired();
+    ASSERT_EQ(1, WindowsDuring(1));
+    uint32_t found_ms = bspMockWifiLastPowerOnMs();
     RunCycles(1);
 
     bspMockPressButton();
     ASSERT_EQ(1, WindowsDuring(1));
     bspMockReleaseButton();
 
-    EXPECT_EQ(0, WindowsDuring(kCyclesPerDay));
+    // Three cycles are behind us: the finding, a quiet one and the button's.
+    EXPECT_EQ(0, WindowsDuring(kCyclesPerPause - 3));
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ(found_ms + kPauseMs, bspMockWifiLastPowerOnMs());
 }
 
 TEST_F(TempSensorMainTest, PairingTheDeviceLetsItReportAgain)
@@ -1382,6 +1453,375 @@ TEST_F(TempSensorMainTest, AResetFindsOutAgainWithOneShortWindow)
     ASSERT_EQ(1, WindowsDuring(1));
     EXPECT_LT(bspMockWifiLastWindowMs(), 1000u);
     EXPECT_EQ(0, WindowsDuring(3));
+}
+
+// --- Confirmed reports -----------------------------------------------------
+//
+// Reaching the cloud did not always mean the report did: the kitchen board's
+// window at 08:34 on 11-10 went online and its DPs never showed in the log. So
+// the temperature now goes out last as a synchronous report, and the module's
+// answer decides whether the report was delivered. A module that never answers
+// one gets the old rule: reaching the cloud is delivering.
+
+constexpr uint32_t kAckTimeoutMs = 6u * 1000u;
+constexpr uint32_t kDrainMs      = 2u * 1000u;
+
+TEST_F(TempSensorMainTest, TheTemperatureGoesLastAndAsksForAnAnswer)
+{
+    ModuleReachesCloud();
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN);
+    ASSERT_EQ(1, WindowsDuring(1));
+
+    TuyaSdkMockDp dp;
+    int           last = tuyaSdkMockDpCount() - 1;
+
+    ASSERT_TRUE(tuyaSdkMockDpAt(last, &dp));
+    EXPECT_EQ(DPID_TEMP_CURRENT, dp.dpid);
+    EXPECT_TRUE(dp.sync);
+
+    // One, and only one: the SDK allows no second before the first is answered.
+    for (int i = 0; i < last; i++)
+    {
+        ASSERT_TRUE(tuyaSdkMockDpAt(i, &dp));
+        EXPECT_FALSE(dp.sync) << "DP " << int(dp.dpid);
+    }
+}
+
+TEST_F(TempSensorMainTest, TheAnswerDecidesWhetherTheReportWasDelivered)
+{
+    // The report after boot, on a fresh run, for each way the module can
+    // answer. Delivered or not shows in the next cycle: a report that did not
+    // get through is retried five minutes later.
+    struct Row {
+        const char*           module;
+        TuyaSdkMockSyncAnswer answer;
+        bool                  delivered;
+        uint32_t              window_min_ms; // how long the module was powered
+        uint32_t              window_max_ms;
+    };
+
+    const Row rows[] = {
+        {"takes it: off at once, no drain",         TUYA_MOCK_SYNC_TAKEN,   true,  0u,            1000u},
+        {"refuses it: off at once, retried",        TUYA_MOCK_SYNC_REFUSED, false, 0u,            1000u},
+        {"never answers: the old rule, after 6 s",  TUYA_MOCK_SYNC_SILENT,  true,  kAckTimeoutMs, kAckTimeoutMs + 1000u},
+    };
+
+    for (const Row& row : rows)
+    {
+        PowerOn();
+        ModuleReachesCloud();
+        tuyaSdkMockSetSyncAnswer(row.answer);
+
+        ASSERT_EQ(1, WindowsDuring(1)) << row.module;
+        EXPECT_GE(bspMockWifiLastWindowMs(), row.window_min_ms) << row.module;
+        EXPECT_LE(bspMockWifiLastWindowMs(), row.window_max_ms) << row.module;
+
+        EXPECT_EQ(row.delivered ? 0 : 1, WindowsDuring(1)) << row.module << ": a retry?";
+    }
+}
+
+TEST_F(TempSensorMainTest, WhatTheFirstAnswerSaysAboutTheRest)
+{
+    // Two reports in one run. Once the module has answered, a missing answer
+    // is a failure; once it has failed to answer even once, the run stops
+    // asking and goes back to the 2 s drain.
+    struct Row {
+        const char*           module;
+        TuyaSdkMockSyncAnswer first;
+        TuyaSdkMockSyncAnswer second;
+        bool                  second_asks; // the second report's temperature is synchronous
+        bool                  second_delivered;
+        uint32_t              second_min_ms;
+        uint32_t              second_max_ms;
+    };
+
+    const Row rows[] = {
+        {"answers both times",         TUYA_MOCK_SYNC_TAKEN,  TUYA_MOCK_SYNC_TAKEN,  true,  true,  0u,            1000u},
+        {"answered, then went quiet",  TUYA_MOCK_SYNC_TAKEN,  TUYA_MOCK_SYNC_SILENT, true,  false, kAckTimeoutMs, kAckTimeoutMs + 1000u},
+        {"never answers",              TUYA_MOCK_SYNC_SILENT, TUYA_MOCK_SYNC_SILENT, false, true,  kDrainMs,      kDrainMs + 1000u},
+        {"quiet, then would answer",   TUYA_MOCK_SYNC_SILENT, TUYA_MOCK_SYNC_TAKEN,  false, true,  kDrainMs,      kDrainMs + 1000u},
+    };
+
+    for (const Row& row : rows)
+    {
+        PowerOn();
+        tuyaSdkMockSetSyncAnswer(row.first);
+        SettleAt(234); // the report after boot, then two quiet cycles
+
+        tuyaSdkMockSetSyncAnswer(row.second);
+        int dps_before = tuyaSdkMockDpCount();
+        StageReading(280, 55u);
+        ASSERT_EQ(1, WindowsDuring(2)) << row.module; // one cycle of median lag
+
+        bool          asked = false;
+        TuyaSdkMockDp dp;
+
+        for (int i = dps_before; tuyaSdkMockDpAt(i, &dp); i++)
+        {
+            asked = asked || dp.sync;
+        }
+
+        EXPECT_EQ(row.second_asks, asked) << row.module;
+        EXPECT_GE(bspMockWifiLastWindowMs(), row.second_min_ms) << row.module;
+        EXPECT_LE(bspMockWifiLastWindowMs(), row.second_max_ms) << row.module;
+        EXPECT_EQ(row.second_delivered ? 0 : 1, WindowsDuring(1)) << row.module << ": a retry?";
+    }
+}
+
+TEST_F(TempSensorMainTest, ARefusedReportIsSentAgainUntilItIsTaken)
+{
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN); // so the run knows it answers
+    SettleAt(234);
+
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_REFUSED);
+    StageReading(280, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN);
+    int dps_before = tuyaSdkMockDpCount();
+    ASSERT_EQ(1, WindowsDuring(1)); // the retry, five minutes on
+
+    uint32_t value = 0;
+    ASSERT_TRUE(tuyaSdkMockLastDpValue(DPID_TEMP_CURRENT, &value));
+    EXPECT_NEAR(280, static_cast<int32_t>(value), 1);
+    EXPECT_GT(tuyaSdkMockDpCount(), dps_before);
+
+    EXPECT_EQ(0, WindowsDuring(3)); // and that one landed
+}
+
+TEST_F(TempSensorMainTest, APairingWindowGivesTheAppItsTenSecondsWhateverTheAnswer)
+{
+    const TuyaSdkMockSyncAnswer answers[] = {TUYA_MOCK_SYNC_TAKEN, TUYA_MOCK_SYNC_REFUSED, TUYA_MOCK_SYNC_SILENT};
+
+    for (TuyaSdkMockSyncAnswer answer : answers)
+    {
+        PowerOn();
+        ModuleReachesCloud();
+        tuyaSdkMockSetSyncAnswer(answer);
+
+        bspMockPressButton();
+        ASSERT_EQ(1, WindowsDuring(1));
+        bspMockReleaseButton();
+
+        EXPECT_GE(bspMockWifiLastWindowMs(), 10u * 1000u) << "answer " << int(answer);
+    }
+}
+
+TEST_F(TempSensorMainTest, AResetAsksAgain)
+{
+    // Whether the module answers is kept in RAM: a module swapped for one with
+    // newer firmware gets asked.
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_SILENT);
+    SettleAt(234);
+
+    ResetKeepingPower(BSP_Reset_Pin);
+    tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN);
+    ASSERT_EQ(1, WindowsDuring(1));
+
+    TuyaSdkMockDp dp;
+    ASSERT_TRUE(tuyaSdkMockDpAt(tuyaSdkMockDpCount() - 1, &dp));
+    EXPECT_TRUE(dp.sync);
+}
+
+// --- The sensor bus --------------------------------------------------------
+//
+// A glitch can leave the I2C controller believing the bus is busy, and a
+// sensor interrupted mid-byte holds SDA low. Either fails every transfer after
+// it, and a device that cannot read reports nothing -- not even the 4 h report.
+
+TEST_F(TempSensorMainTest, AFailedReadPutsTheBusBackToIdleAndAGoodOneLeavesItAlone)
+{
+    struct Row {
+        bool read_ok;
+        int  recoveries; // so far
+    };
+
+    const Row rows[] = {
+        {true,  0},
+        {false, 1},
+        {false, 2},
+        {true,  2},
+        {true,  2},
+        {false, 3},
+    };
+
+    int cycle = 0;
+
+    for (const Row& row : rows)
+    {
+        cycle++;
+        bspMockSensorSetReadFails(!row.read_ok);
+        RunCycles(1);
+        EXPECT_EQ(row.recoveries, bspMockSensorRecoverCalls()) << "cycle " << cycle;
+    }
+}
+
+TEST_F(TempSensorMainTest, ALockedUpBusCostsOneReadingNotAllOfThem)
+{
+    SettleAt(234);
+
+    bspMockSensorLockBus(); // fails every transfer until recovered
+    StageReading(280, 55u);
+    RunCycles(1);
+    EXPECT_EQ(1, bspMockSensorRecoverCalls());
+
+    // The next reads are fine: one cycle of median lag, then the report.
+    EXPECT_EQ(1, WindowsDuring(2));
+    EXPECT_EQ(1, bspMockSensorRecoverCalls());
+}
+
+// --- The watchdog ----------------------------------------------------------
+//
+// It resets a board that stops making progress, after 20-40 s on the STM32.
+// So nothing the cycle does awake may go that long without feeding it --
+// including a three-minute pairing window, which is far longer.
+
+TEST_F(TempSensorMainTest, NothingTheCycleDoesAwakeGoesLongUnfed)
+{
+    bspMockWatchdogStartMeasuring();
+
+    ModuleReachesCloud();
+    SettleAt(234); // reports, and the 6 s wait for an answer that never comes
+
+    ModuleBootsButNeverConnects(); // three 29 s windows and a pause
+    StageReading(280, 55u);
+    RunCycles(4 + kCyclesPerPause);
+
+    ModuleNeverAnswers(); // the 15 s alive timeout
+    RunCycles(kCyclesPerPause);
+
+    ModuleIsUnpaired(); // a three-minute pairing window nobody finishes
+    bspMockPressButton();
+    RunCycles(1);
+    bspMockReleaseButton();
+
+    bspMockSensorSetReadFails(true); // the bus recovery
+    RunCycles(2);
+
+    EXPECT_GT(bspMockWifiPowerOnCalls(), 6);
+    EXPECT_LE(bspMockWatchdogLongestGapMs(), 1000u);
+}
+
+// --- The diagnostic record (DP 104) -----------------------------------------
+//
+// What the device went through since its last report got through, sent with
+// the next report that does -- including the one after a reset, which is the
+// one that most needs to say what came before it. diag_record_test has the
+// text field by field; these are the stories that fill it in.
+
+TEST_F(TempSensorMainTest, TheDiagnosticDpSaysWhatHappenedSinceTheLastReport)
+{
+    struct Row {
+        const char*                story;
+        std::function<void()>      before; // everything up to the report
+        std::function<void()>      report; // the cycles that send it
+        const char*                dp104;  // "" when the report leaves it out
+    };
+
+    const Row rows[] = {
+        {"the first report after a power-on",
+         [] {},
+         [this] { ModuleReachesCloud(); RunCycles(1); },
+         "r=por c=1 w=0 u=0 m=ff s=0"},
+
+        {"an ordinary report: nothing to say",
+         [this] { SettleAt(234); },
+         [this] { StageReading(280, 55u); RunCycles(2); },
+         ""},
+
+        {"three windows the router never answered",
+         [this] { PausedAfterThreeFailures(); },
+         [this] { ModuleReachesCloud(); RunCycles(kCyclesPerPause); },
+         "r=- c=30 w=3 u=0 m=02 s=0"},
+
+        {"a window that reached the cloud but was refused",
+         [this] {
+             tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN);
+             SettleAt(234);
+             tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_REFUSED);
+             StageReading(280, 55u);
+             RunCycles(2);
+         },
+         [this] { tuyaSdkMockSetSyncAnswer(TUYA_MOCK_SYNC_TAKEN); RunCycles(1); },
+         "r=- c=5 w=1 u=0 m=04 s=0"},
+
+        {"a window that found the module unpaired",
+         [this] { SettleAt(234); ModuleIsUnpaired(); StageReading(280, 55u); RunCycles(2); },
+         [this] { ModuleReachesCloud(); RunCycles(kCyclesPerPause); },
+         "r=- c=28 w=1 u=1 m=01 s=0"},
+
+        {"a module that never spoke",
+         [this] { SettleAt(234); ModuleNeverAnswers(); StageReading(280, 55u); RunCycles(2); },
+         [this] { ModuleReachesCloud(); RunCycles(1); },
+         "r=- c=5 w=1 u=0 m=ff s=0"},
+
+        {"a pairing window nobody finished: not a failure to report",
+         [this] {
+             SettleAt(234);
+             ModuleIsUnpaired();
+             bspMockPressButton();
+             RunCycles(1);
+             bspMockReleaseButton();
+         },
+         [this] { ModuleReachesCloud(); StageReading(280, 55u); RunCycles(2); },
+         ""},
+
+        {"two sensor reads that failed",
+         [this] { SettleAt(234); bspMockSensorSetReadFails(true); RunCycles(2); bspMockSensorSetReadFails(false); },
+         [this] { StageReading(280, 55u); RunCycles(2); },
+         "r=- c=6 w=0 u=0 m=ff s=2"},
+
+        // The kitchen on 11-11: an outage, then silence until the Reset button.
+        // The report after it says the device kept cycling the whole time.
+        {"the Reset button pressed in the middle of an outage",
+         [this] { PausedAfterThreeFailures(); RunCycles(10); },
+         [this] { ResetKeepingPower(BSP_Reset_Pin); ModuleReachesCloud(); RunCycles(1); },
+         "r=pin c=17 w=3 u=0 m=02 s=0"},
+
+        {"the watchdog, the same way",
+         [this] { PausedAfterThreeFailures(); RunCycles(10); },
+         [this] { ResetKeepingPower(BSP_Reset_IWatchdog); ModuleReachesCloud(); RunCycles(1); },
+         "r=wdg c=17 w=3 u=0 m=02 s=0"},
+
+        {"a power-on: the record is gone with the power",
+         [this] { PausedAfterThreeFailures(); RunCycles(10); },
+         [this] {
+             for (uint8_t i = 0; i < 3; i++) bspMockSetRetained(i, 0u);
+             ResetKeepingPower(BSP_Reset_PowerOn); ModuleReachesCloud(); RunCycles(1);
+         },
+         "r=por c=1 w=0 u=0 m=ff s=0"},
+    };
+
+    for (const Row& row : rows)
+    {
+        PowerOn();
+        row.before();
+
+        int strings_before = tuyaSdkMockStringCount();
+        int windows_before = WindowsOpened();
+        row.report();
+
+        ASSERT_GT(WindowsOpened(), windows_before) << row.story << ": no report went out";
+        EXPECT_EQ(row.dp104, DiagSentSince(strings_before)) << row.story;
+    }
+}
+
+TEST_F(TempSensorMainTest, TheRecordGoesOutOnceAndStartsOver)
+{
+    PausedAfterThreeFailures();
+    ModuleReachesCloud();
+    RunCycles(kCyclesPerPause); // the report that carries it
+
+    int strings_before = tuyaSdkMockStringCount();
+    StageReading(330, 55u);
+    ASSERT_EQ(1, WindowsDuring(2));
+    EXPECT_EQ("", DiagSentSince(strings_before));
+
+    // ...and a reset now has only itself to report.
+    ResetKeepingPower(BSP_Reset_Pin);
+    strings_before = tuyaSdkMockStringCount();
+    ASSERT_EQ(1, WindowsDuring(1));
+    EXPECT_EQ("r=pin c=1 w=0 u=0 m=ff s=0", DiagSentSince(strings_before));
 }
 
 } // namespace

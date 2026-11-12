@@ -85,6 +85,11 @@ void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
 
+  /* Not the generated spin: with no one watching, that is a dead board until
+     somebody presses Reset.  The next run reports the reset as a fault (DP
+     104, r=flt).  The watchdog would get there too, 20-40 s later. */
+  BSP_FatalReset();
+
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

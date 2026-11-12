@@ -2,9 +2,12 @@
 
 #include "battery.h"
 #include "bsp.h"
+#include "diag_record.h"
 #include "hdc3020.h"
 #include "report_policy.h"
 #include "tuya_link.h"
+
+_Static_assert(DIAG_WORDS <= BSP_RETAINED_WORDS, "the diagnostic record does not fit the retained words");
 
 // --- Why this file is written as straight-line code ---------------------------
 //
@@ -61,9 +64,18 @@
  * minutes is already far longer than any successful pairing takes. */
 #define WIFI_PAIRING_TIMEOUT_MS (3u * 60u * 1000u)
 
-/* Held open after the DPs go out. mcu_dp_*_update() only queues bytes; the
- * module still has to send them on and acknowledge. Cutting the supply the
- * instant the last byte leaves the shift register throws all of that away. */
+/* How long the module is given to answer the report's synchronous temperature
+ * (Tuya_ReportCachedDpsWithAck). The SDK's notes (protocol.h, item 14) say the
+ * module answers with a refusal after 5 s when it cannot deliver, and that
+ * the MCU must wait longer than that. A module that has not answered by now
+ * is one that does not answer at all. */
+#define WIFI_ACK_TIMEOUT_MS (6u * 1000u)
+
+/* Held open after the DPs go out, when the module does not answer for them.
+ * mcu_dp_*_update() only queues bytes; the module still has to send them on.
+ * Cutting the supply the instant the last byte leaves the shift register
+ * throws all of that away. With an answer there is nothing to wait for: it
+ * comes back once the cloud has the report. */
 #define WIFI_DRAIN_MS (2u * 1000u)
 
 /* A pairing window drains longer: reaching the cloud is where provisioning
@@ -89,6 +101,12 @@
  * three failures in a row says it is down and likely to stay down a while.
  * Through a long outage that is one window every two hours, about 12 a day.
  *
+ * A module found waiting to be paired goes straight to the pause, with no
+ * quick retries: it will not have been paired five minutes later. But it is
+ * asked again when the pause runs out, every time, rather than never -- a
+ * device that stops trying for good can only be brought back by someone who
+ * knows to press Reset. Asking costs one ~4 s window every two hours.
+ *
  * Times, not cycles. A shorter CYCLE_PERIOD_MS must not shorten the retry,
  * which is already about as short as a router takes to come back. */
 #define REPORT_RETRY_MS (5u * 60u * 1000u)
@@ -96,6 +114,38 @@
 
 /* Quick retries before failed report windows start the pause. */
 #define REPORT_RETRIES 2u
+
+/* How a window ended. */
+typedef enum {
+    /* It reached the cloud, and the report with it: confirmed by the module's
+     * answer, or -- for a module that never answers -- by reaching the cloud
+     * at all. A pairing window that got through ends here too. */
+    WINDOW_DELIVERED,
+
+    /* It did not: the module never spoke, never reached the cloud, or the
+     * cloud refused or never confirmed the report. */
+    WINDOW_FAILED,
+
+    /* The module said it is waiting to be paired, so there was nothing to
+     * try. Report windows only: a pairing window waits it out. */
+    WINDOW_UNPAIRED,
+} WindowResult;
+
+/* Whether the module answers a synchronous report (Tuya_ReportCachedDpsWithAck)
+ * -- not every module firmware does, and 3.0.93 has not been checked. */
+typedef enum {
+    /* Not asked yet this run. */
+    ACK_UNKNOWN,
+
+    /* It has answered. From now on a report it does not answer for has not
+     * been delivered. */
+    ACK_ANSWERS,
+
+    /* The first report that asked went unanswered. The rest of this run goes
+     * back to the old rule -- reaching the cloud is delivering -- and does not
+     * spend WIFI_ACK_TIMEOUT_MS on every window finding that out again. */
+    ACK_SILENT,
+} AckSupport;
 
 static ReportPolicy report_policy;
 
@@ -126,15 +176,15 @@ static uint8_t report_retries_left;
  * may be retried a little early. Harmless. */
 static uint32_t report_hold_until_ms;
 
-/* A report window found the module waiting to be paired: it never was, or it
- * was removed in the app. No report window opens while this is set -- each
- * would only find the module still waiting -- not even the ones the policy
- * keeps asking for until the first report after boot lands. Only a pairing
- * window that gets through clears it.
- *
- * In RAM, like the backoff. After a reset the first report window finds out
- * again, at the cost of the ~4 s the module takes to say so. */
-static bool module_unpaired;
+/* In RAM: a reset asks again. */
+static AckSupport ack_support;
+
+/* What the device went through since its last report got through, for DP
+ * 104 (diag_record.h). Unlike everything else here it outlives a reset: it is
+ * written to the retained words at the end of every cycle, and read back at
+ * boot. That is the point of it -- the report after the Reset button is the
+ * one that most needs to say what happened before it. */
+static DiagRecord diag;
 
 /* The lowest the module's load pulled the cell to, in mV, over the windows
  * since the last one that reached the cloud -- or 0 if none was measured: the
@@ -162,9 +212,11 @@ static uint16_t previous_rest_mv;
 
 static uint16_t LowerMv(uint16_t a_mv, uint16_t b_mv);
 static bool PairingRequested(void);
+static bool PushReport(bool have_reading, bool pairing);
 static bool ReportBackoffOver(void);
-static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv);
-static void UpdateBackoff(bool reached_cloud, bool pairing);
+static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, uint8_t* module_state);
+static void SaveDiag(void);
+static void UpdateBackoff(WindowResult result, bool pairing);
 static void WaitForNextCycle(void);
 
 void TempSensorInit(void)
@@ -180,11 +232,30 @@ void TempSensorInit(void)
      * reports, or finds out the module has nowhere to report to. */
     report_retries_left  = REPORT_RETRIES;
     report_hold_until_ms = next_cycle_ms;
-    module_unpaired      = false;
+    ack_support          = ACK_UNKNOWN;
     battery_min_mv         = 0u;
     battery_average_min_mv = 0u;
     previous_rest_mv       = 0u;
     Battery_SagTrendReset(&sag_trend);
+
+    /* The record does carry over -- unless this is a power-on, when the
+     * retained words hold whatever they came up with, and the checksum turns
+     * them away. Either way it now has a reset to report. */
+    uint32_t words[DIAG_WORDS];
+
+    for (uint8_t i = 0u; i < DIAG_WORDS; i++)
+    {
+        words[i] = BSP_Retained_Read(i);
+    }
+
+    if (!Diag_Restore(words, &diag))
+    {
+        Diag_Clear(&diag);
+    }
+
+    diag.reset = (uint8_t) BSP_GetResetReason();
+
+    SaveDiag();
 }
 
 void TempSensorRun(void)
@@ -197,6 +268,10 @@ void TempSensorRun(void)
 
 void TempSensorRunCycle(void)
 {
+    /* The sleep fed it on the way out; this covers a cycle the button started
+     * early, and says plainly that a cycle is progress. */
+    BSP_Watchdog_Refresh();
+
     /* The button first, because a press is usually why this cycle is running at
      * all: it ends the sleep early. Reading it here also means the debounce
      * delay is paid before the sensor read rather than after, so a press
@@ -236,6 +311,17 @@ void TempSensorRunCycle(void)
     bool            report_due   = false;
     int16_t         temp_c10     = 0;
 
+    if (!have_reading)
+    {
+        /* Whatever went wrong on the bus, put it back to idle now, so the next
+         * cycle starts clean. A failure that leaves the controller "busy", or
+         * the sensor holding SDA, would otherwise fail every read after it --
+         * and a device that cannot read reports nothing at all. */
+        BSP_Sensor_RecoverBus();
+    }
+
+    Diag_CountCycle(&diag, have_reading);
+
     if (have_reading)
     {
         /* On the schedule rather than the clock, like the backoff and for the
@@ -266,19 +352,56 @@ void TempSensorRunCycle(void)
     /* Every cycle, report due or not -- ReportBackoffOver says why. */
     bool backoff_over = ReportBackoffOver();
 
-    /* A report held back -- by the backoff, or because the module is unpaired
-     * -- is not lost. Nothing was committed, so the policy still finds it
-     * outstanding once the hold ends, and the readings above are cached for a
-     * pairing window in the meantime. The button is never held back -- though
-     * its window only ends either hold if it gets through. */
-    if ((report_due && backoff_over && !module_unpaired) || pairing)
+    /* A report held back by the backoff -- after failed windows, or after the
+     * module said it was unpaired -- is not lost. Nothing was committed, so
+     * the policy still finds it outstanding once the hold ends, and the
+     * readings above are cached for a pairing window in the meantime. The
+     * button is never held back -- though its window only ends a hold if it
+     * gets through. */
+    if ((report_due && backoff_over) || pairing)
     {
-        bool reached_cloud = RunWifiWindow(have_reading, pairing, temp_c10, battery_mv);
+        /* Cached with the module unpowered, like the readings. Only when there
+         * is something to say: an ordinary report leaves DP 104 out. */
+        char    diag_text[DIAG_TEXT_MAX];
+        uint8_t diag_len = Diag_IsNotable(&diag) ? Diag_Format(&diag, diag_text) : 0u;
 
-        UpdateBackoff(reached_cloud, pairing);
+        Tuya_SetDiag(diag_text, diag_len);
+
+        uint8_t      module_state;
+        WindowResult result = RunWifiWindow(have_reading, pairing, temp_c10, battery_mv, &module_state);
+
+        UpdateBackoff(result, pairing);
+
+        if (result == WINDOW_DELIVERED)
+        {
+            /* It went out with this report, if there was anything in it. */
+            Diag_Clear(&diag);
+        }
+        else if (!pairing)
+        {
+            /* A pairing window nobody finished is not a failure to report:
+             * the module spent it waiting for a phone. */
+            Diag_CountFailedWindow(&diag, result == WINDOW_UNPAIRED, module_state);
+        }
     }
 
+    /* Every cycle, so a reset at any point -- the button, the watchdog, a
+     * fault -- finds the record at most one cycle old. */
+    SaveDiag();
+
     WaitForNextCycle();
+}
+
+static void SaveDiag(void)
+{
+    uint32_t words[DIAG_WORDS];
+
+    Diag_Store(&diag, words);
+
+    for (uint8_t i = 0u; i < DIAG_WORDS; i++)
+    {
+        BSP_Retained_Write(i, words[i]);
+    }
 }
 
 /* Whether a report window may open in this cycle -- which it may, except while
@@ -307,12 +430,12 @@ static bool ReportBackoffOver(void)
     return true;
 }
 
-/* After a window: one that got through clears the backoff, a failed report
- * window extends it.
+/* After a window: one that got through clears the backoff, a report window
+ * that did not extends it.
  */
-static void UpdateBackoff(bool reached_cloud, bool pairing)
+static void UpdateBackoff(WindowResult result, bool pairing)
 {
-    if (reached_cloud)
+    if (result == WINDOW_DELIVERED)
     {
         /* Whatever kind of window it was: the network works, and anything that
          * was outstanding has just been delivered with it. */
@@ -332,7 +455,14 @@ static void UpdateBackoff(bool reached_cloud, bool pairing)
 
     uint32_t wait_ms;
 
-    if (report_retries_left > 0u)
+    if (result == WINDOW_UNPAIRED)
+    {
+        /* Straight to the pause, without spending a quick retry: it will still
+         * be waiting to be paired five minutes from now. But asked again at
+         * the end of it -- see REPORT_PAUSE_MS. */
+        wait_ms = REPORT_PAUSE_MS;
+    }
+    else if (report_retries_left > 0u)
     {
         report_retries_left--;
         wait_ms = REPORT_RETRY_MS;
@@ -348,18 +478,80 @@ static void UpdateBackoff(bool reached_cloud, bool pairing)
     report_hold_until_ms = next_cycle_ms + wait_ms;
 }
 
-/* One report and/or pairing window, start to finish. Returns whether the
- * module reached the cloud. have_reading says this cycle read the sensor, and
- * temp_c10 is then its filtered temperature. rest_mv is this cycle's resting
- * cell voltage, to set the window's sag against.
+/* Once the cloud is up: push the cached DPs, and say whether the report got
+ * there.
+ *
+ * With a reading to deliver, the push asks the module to answer for it
+ * (Tuya_ReportCachedDpsWithAck), and the answer is what decides -- unless the
+ * module has never answered one, in which case the old rule stands: reaching
+ * the cloud is delivering. Without a reading (a pairing window whose sensor
+ * read failed) there is nothing to commit, and nothing to ask about.
+ */
+static bool PushReport(bool have_reading, bool pairing)
+{
+    bool     delivered = true;
+    uint32_t drain_ms  = 0u;
+
+    if (have_reading && (ack_support != ACK_SILENT))
+    {
+        Tuya_ReportCachedDpsWithAck();
+
+        if (Tuya_WaitUntil(Tuya_ReportAnswered, WIFI_ACK_TIMEOUT_MS))
+        {
+            /* The answer comes once the cloud has the report, so there is
+             * nothing left in flight to drain. */
+            ack_support = ACK_ANSWERS;
+            delivered   = Tuya_ReportConfirmed();
+        }
+        else if (ack_support == ACK_ANSWERS)
+        {
+            /* It answers, just not this time: past its own 5 s it would have
+             * refused, so something else went wrong. Not delivered. */
+            delivered = false;
+        }
+        else
+        {
+            /* Never answered, not once: this module firmware does not do 0x22.
+             * The six seconds just spent servicing it were a longer drain than
+             * the old rule's, so its verdict stands, and the rest of the run
+             * skips the wait. */
+            ack_support = ACK_SILENT;
+        }
+    }
+    else
+    {
+        Tuya_ReportCachedDps();
+
+        drain_ms = WIFI_DRAIN_MS;
+    }
+
+    if (pairing)
+    {
+        /* Whatever the answer: the app is still registering the device. */
+        drain_ms = WIFI_PAIRING_DRAIN_MS;
+    }
+
+    if (drain_ms != 0u)
+    {
+        Tuya_ServiceFor(drain_ms);
+    }
+
+    return delivered;
+}
+
+/* One report and/or pairing window, start to finish, and how it ended.
+ * have_reading says this cycle read the sensor, and temp_c10 is then its
+ * filtered temperature. rest_mv is this cycle's resting cell voltage, to set
+ * the window's sag against. *module_state is set to the Wi-Fi state the module
+ * last reported, for the diagnostic record.
  *
  * Every step has a deadline and every exit path goes through Tuya_PowerOff(),
  * because leaving the module powered is the one mistake that empties the cell
  * outright -- tens of milliamps against a budget built on microamps.
  */
-static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv)
+static WindowResult RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uint16_t rest_mv, uint8_t* module_state)
 {
-    bool reached_cloud = false;
+    WindowResult result = WINDOW_FAILED;
 
     /* The windows before this one: its own minimum is still to be measured.
      * Cached now, with the module still unpowered, like the readings. */
@@ -375,12 +567,9 @@ static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uin
         if (!pairing && Tuya_IsUnpaired())
         {
             /* No network to try, so the cloud timeout would be waited out for
-             * nothing: the window ends here, some 4 s in rather than 29.
-             *
-             * UpdateBackoff counts it as a failed window. That is never seen:
-             * only a window that gets through clears module_unpaired, and that
-             * clears the backoff too. */
-            module_unpaired = true;
+             * nothing: the window ends here, some 4 s in rather than 29, and
+             * the next one is two hours off (UpdateBackoff). */
+            result = WINDOW_UNPAIRED;
         }
         else
         {
@@ -393,16 +582,12 @@ static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uin
 
             uint32_t cloud_timeout_ms = pairing ? WIFI_PAIRING_TIMEOUT_MS : WIFI_CLOUD_TIMEOUT_MS;
 
-            if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms))
+            /* The push is unconditional, not gated on a report being due: the
+             * cloud is up and the cached readings are this cycle's, so a
+             * pairing window pushes the current state too. That is what makes
+             * the button confirm to whoever pressed it that the device works. */
+            if (Tuya_WaitUntil(Tuya_IsCloudConnected, cloud_timeout_ms) && PushReport(have_reading, pairing))
             {
-                /* Unconditional, not gated on a report being due: the cloud is
-                 * up and the cached readings are this cycle's, so a pairing
-                 * window pushes the current state too. That is what makes the
-                 * button confirm to whoever pressed it that the device works. */
-                Tuya_ReportCachedDps();
-
-                Tuya_ServiceFor(pairing ? WIFI_PAIRING_DRAIN_MS : WIFI_DRAIN_MS);
-
                 /* Committed only here, on the one path where the value reached
                  * the cloud. Every other way out of this function leaves the
                  * policy alone, so the next cycle still finds the change
@@ -420,13 +605,13 @@ static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uin
                     ReportPolicy_ReportSent(&report_policy, temp_c10, next_cycle_ms);
                 }
 
-                /* Paired, whatever an earlier window found. While the flag is
-                 * set only a pairing window gets this far. */
-                module_unpaired = false;
-                reached_cloud   = true;
+                result = WINDOW_DELIVERED;
             }
         }
     }
+
+    /* Before the power goes: Tuya_PowerOn is what forgets it. */
+    *module_state = Tuya_WifiState();
 
     Tuya_PowerOff();
 
@@ -443,7 +628,7 @@ static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uin
      * which the 3.3 V rail's capacitors carry the module through. */
     Battery_SagTrendAdd(&sag_trend, Battery_CollapseMv(rest_mv, sag.average_min_mv));
 
-    if (reached_cloud)
+    if (result == WINDOW_DELIVERED)
     {
         /* What was cached has gone out, so the next report starts from this
          * window alone. */
@@ -456,7 +641,7 @@ static bool RunWifiWindow(bool have_reading, bool pairing, int16_t temp_c10, uin
         battery_average_min_mv = LowerMv(battery_average_min_mv, sag.average_min_mv);
     }
 
-    return reached_cloud;
+    return result;
 }
 
 /* The lower of two readings in mV, where 0 is "no reading" rather than 0 V.

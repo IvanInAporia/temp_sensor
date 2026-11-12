@@ -48,6 +48,7 @@ COLUMNS = [
     ("damaged", ("battery_damaged",)),                           # DP 102
     ("temp C",  ("temp_current", "va_temperature")),             # DP 1, tenths of a degree
     ("rh %",    ("humidity_value", "va_humidity")),              # DP 2
+    ("diag",    ("diagnostics",)),                               # DP 104, only when there is something to say
 ]
 ALL_CODES = [code for _, codes in COLUMNS for code in codes]
 

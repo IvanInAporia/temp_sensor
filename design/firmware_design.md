@@ -21,15 +21,20 @@ whether the cell looks damaged), plus one with the lowest the cell was pulled to
 in the windows before (§5), and put it away again. Then sleep.
 
 A press of the Wi-Fi button opens the same window for pairing instead, and can
-interrupt the sleep to do it. A device that isn't paired opens no report windows
-at all until the button pairs it (§4).
+interrupt the sleep to do it. A device that isn't paired checks back with one short
+window every 2 h until the button pairs it (§4).
+
+When something went wrong since the last report got through (a reset, failed
+windows or failed sensor reads), the next report also carries a line of
+diagnostic text, DP 104 (§4). A watchdog resets a board that stops making progress
+(§5).
 
 **Reports go out when the temperature moves, and at least every 4 h.** A move of
 1.0 °C goes out at once, one of 0.3 °C once 30 min have passed since the last
 report, and a room that holds steady still reports every 4 h, so the app can tell
 it from a dead device and the battery state gets out (§4). Two other things in the
 code follow from reporting on change: the first reading after boot always reports,
-and a report is only "spent" once it has actually reached the cloud.
+and a report is only "spent" once the module confirms the cloud has it.
 
 ## 2. Layout
 
@@ -37,14 +42,15 @@ and a report is only "spent" once it has actually reached the cloud.
 libs/src/bsp/bsp.h          the portability boundary — one implementation per board
 libs/src/sensor/            HDC3020 driver (trigger-on-demand, CRC-checked)
 libs/src/battery/           NiMH cell voltage and sag -> percent, level, damaged
-libs/src/report/            the spike filter and the "is this worth the radio" rule
+libs/src/report/            the spike filter, the "is this worth the radio" rule,
+                              and the diagnostic record (DP 104)
 libs/src/tuya_link/         the glue between the cycle and the vendor MCU SDK
 temp_sensor_main/           the cycle itself
 tuya/                       the vendor Tuya MCU SDK, ported (§7)
 
 temp_sensor_STM32L010F4/    CubeMX project: HAL, startup, and
   Core/Src/bsp_stm32.c        >>> the only file that knows what the hardware is
-libs/test/                  host GoogleTest suite (152 tests) over the same C
+libs/test/                  host GoogleTest suite (171 tests) over the same C
 ```
 
 Everything above `bsp.h` compiles for both the target and the host, unchanged and
@@ -123,6 +129,21 @@ cloud" costs interrupt wakeups rather than a spin.
 on the module forever. It is a separate processor on the far end of a UART with no
 reset line; if it never answers, the cycle ends and a later one tries again (§4).
 
+**The watchdog is the backstop for that rule** (§5). `Tuya_WaitUntil` feeds it on
+every pass, which is only safe because every wait it runs has a deadline. A three-
+minute pairing window is far longer than the watchdog's timeout, and that time is
+spent in this loop. Anything that waits *without* a deadline (a vendor HAL loop
+polling a flag against a stopped tick, the CubeMX `Error_Handler`) stops feeding
+it and gets the board reset.
+
+**No state stops the device for good.** On 2026-11-11 the kitchen board went
+quiet for about 9 h after a house-wide outage and came back the moment its Reset
+button was pressed. The cloud log couldn't say why, but the firmware then had
+three ways to end up there: the unpaired latch, a sensor bus left busy, and a hang
+with no watchdog. All three are gone. Unpaired is now re-checked every 2 h, a
+failed read resets the bus, and the watchdog catches hangs. The report after a
+reset now says what came before it (DP 104).
+
 ## 4. Why measuring and reporting are priced differently
 
 One HDC3020 conversion is ~110 µA for 13 ms. One report is the T3-3S cold-booting,
@@ -182,14 +203,44 @@ filtered temperature has moved from it, and how long ago it was.
 ### Deciding and committing are two calls
 
 `ReportPolicy_Update()` decides; `ReportPolicy_ReportSent()` commits. A window that
-never reached the cloud simply never commits, so the next cycle still finds the
-change outstanding. Otherwise a dropped report would wait for the next 4 h report,
-far too late for a change worth sending.
+did not deliver simply never commits, so the next cycle still finds the change
+outstanding. Otherwise a dropped report would wait for the next 4 h report, far
+too late for a change worth sending.
 
-Any window that reaches the cloud commits this cycle's reading, pairing windows
-included: it pushed that reading, so the 0.3 °C and the 4 h count from it. A cycle
-whose sensor read failed commits nothing, because what went out was an older
-reading.
+Any window that delivers commits this cycle's reading, pairing windows included:
+it pushed that reading, so the 0.3 °C and the 4 h count from it. A cycle whose
+sensor read failed commits nothing, because what went out was an older reading.
+
+### Delivered means the module said so
+
+Reaching the cloud is not the same as delivering. The kitchen board's window at
+08:34 on 11-10 came online in the Tuya event log, but its DPs never showed up, and
+the firmware committed them anyway. About 1 in 20–28 windows looked like that on
+the kitchen and office boards.
+
+So the push after the cloud is up (`Tuya_ReportCachedDpsWithAck`) sends DPs 101,
+103 and 104, then humidity and the battery DPs as plain reports, and the
+**temperature last, as a synchronous report** (cmd 0x22). The module answers it
+(0x23) once the cloud has it, or refuses after 5 s if it can't deliver. The
+plain reports go ahead of it on the same connection, so that one answer covers
+the whole push. It is only one because the SDK allows no second synchronous
+report before the first is answered (`tuya/protocol.h`, item 14). The answers to
+the module's own status queries (`all_data_update`) stay plain.
+
+| The module | The report | The window |
+|---|---|---|
+| answers yes | delivered, committed | powers off at once: no 2 s drain |
+| refuses | not delivered: retried like a failed window | powers off at once |
+| does not answer within 6 s, and has answered before in this run | not delivered | powers off |
+| does not answer within 6 s, and never has in this run | delivered, by the old rule (reaching the cloud is delivering) | the run stops asking: later windows push plainly and drain 2 s |
+
+- **Whether the module answers at all is unverified** for firmware 3.0.93
+  (todo.md, hardware check 5). The last row is the fallback that keeps a module
+  without 0x22 working as before, at the cost of one 6 s wait per boot.
+- **A pairing window still drains 10 s**, whatever the answer: the app is still
+  registering the device.
+- **An answer saves power too.** A window powers off as soon as the answer is in,
+  rather than holding the module up for the fixed 2 s.
 
 ### Backing off after failed windows
 
@@ -204,10 +255,11 @@ then pauses:
 |---|---|
 | 1 or 2 | 5 min after the failed one (`REPORT_RETRY_MS`) |
 | 3 | 2 h after it (`REPORT_PAUSE_MS`) |
+| any one that found the module unpaired | 2 h after it, with no quick retry spent |
 
-- **Only a window that reaches the cloud gives the retries back.** The try at the
-  end of a pause gets none of its own, so a long outage costs one window every
-  2 h, about 12 a day. The retries after boot follow the same rules.
+- **Only a window that delivers gives the retries back.** The try at the end of a
+  pause gets none of its own, so a long outage costs one window every 2 h, about
+  12 a day. The retries after boot follow the same rules.
 - **A held-back report is not lost.** Nothing was committed, so it is still
   outstanding when the backoff runs out. The cycle keeps measuring and caching
   throughout.
@@ -216,18 +268,17 @@ then pauses:
   changes nothing, because the module spent it waiting for a phone and never tried
   the router.
 - **The Reset button is "retry now".** The backoff lives in RAM, so after a reset
-  the first cycle reports.
+  the first cycle reports. Nothing should *need* it any more, though (§3).
 - **Times, not cycles**, so a shorter cycle period cannot shorten the retry. They
   are measured on the schedule (`next_cycle_ms`), not off the clock. A cycle
   starts a few ms after its slot, by a different few each time, and a retry timed
   off the clock would miss the next cycle about half the time.
 
-### Not reporting while unpaired
+### Checking back while unpaired
 
 A module that was never paired, or was removed in the app, has no network to try,
 so a report window would wait out the whole cloud timeout for nothing. Until the
-first report after boot lands, the policy asks for one on every cycle, so the
-backoff alone would still spend about 12 of those windows a day.
+first report after boot lands, the policy asks for one on every cycle.
 
 The module's first state report says whether it is paired. `SMART_CONFIG_STATE`
 (0x00), `AP_STATE` (0x01) and `SMART_AND_AP_STATE` (0x06) mean it is waiting to
@@ -235,15 +286,53 @@ be paired (`Tuya_IsUnpaired()`). A router that is down looks different: the
 module reports 0x02 and gets the backoff instead.
 
 - **A report window that finds the module unpaired powers off at once**, about
-  4 s in rather than 29, and sets `module_unpaired`.
-- **While it is set, no report window opens**, including the retries after boot.
-  The cycle keeps measuring and caching, so a pairing window has current values
-  to push.
-- **Only a pairing window that reaches the cloud clears it.** One that nobody
-  finishes leaves it set. A pairing window is never cut short this way, since
-  waiting to be paired is what it is for.
-- **It lives in RAM.** After a reset or a battery swap, the first report window
-  finds out again, at the cost of one ~4 s window. No EEPROM needed.
+  4 s in rather than 29.
+- **The next report window is 2 h off**, the backoff's pause, without spending a
+  quick retry. It will not have been paired five minutes later. The cycle keeps
+  measuring and caching, so a pairing window has current values to push.
+- **But there always is a next one.** Until 2026-11-11 an unpaired answer set a
+  flag that stopped all report windows until a pairing window got through or
+  somebody pressed Reset. That was one of the ways the kitchen board could have
+  gone quiet that day (§3). Checking back costs one ~4 s window every 2 h, about
+  0.7 mAh a day, and only while the device really is unpaired.
+- **A pairing window is never cut short this way**, since waiting to be paired is
+  what it is for. One that gets through clears the backoff. One that nobody
+  finishes changes nothing.
+
+### The diagnostic record (DP 104)
+
+When a board goes quiet, the cloud log only shows that it did. The record says
+what the device went through since its last report was delivered, and goes out
+with the next one that is, as one line of text:
+
+```
+r=pin c=17 w=3 u=0 m=02 s=0
+```
+
+| Field | Meaning |
+|---|---|
+| `r` | why this run started, until a report has carried it: `por` power-on or brown-out, `pin` Reset button, `wdg` watchdog, `flt` HardFault or failed HAL call, `sw`, `lp`; `-` once it has gone out |
+| `c` | cycles run (5 min each), i.e. how long the device kept going |
+| `w` | report windows that did not deliver (pairing windows don't count) |
+| `u` | of those, how many found the module unpaired |
+| `m` | the module's Wi-Fi state as the last of them closed: `02` no router, `03` router but no cloud, `04` cloud but not confirmed, `00`/`01`/`06` pairing, `ff` never spoke |
+| `s` | cycles whose sensor read failed |
+
+The example is the kitchen's 11-11 story replayed in the tests: an outage, three
+failed windows that never reached the router, then the Reset button 10 cycles
+into the pause. `c=17` says the board kept cycling, so it didn't hang. `m=02`
+says the router wasn't there.
+
+- **Sent only when there is something to say**: after a reset, or after failed
+  windows or sensor reads. An ordinary report leaves DP 104 out.
+- **It survives every reset but a power-on.** It is saved at the end of every
+  cycle to three of the RTC's backup registers (`BSP_Retained_*`), with a
+  checksum that turns away what a power-on leaves there. The report after the
+  Reset button is the one that most needs to say what came before it.
+- **The platform needs the DP**: ID 104, identifier `diagnostics`, String,
+  report only (`tuya/protocol.h`). `tools/tuya_logs` shows it as the `diag`
+  column. At most 40 characters: the SDK builds a string DP in a 48-byte buffer
+  with no bounds check, and a static assert in `tuya_link.c` holds that line.
 
 ## 5. Power
 
@@ -254,7 +343,12 @@ All datasheet figures; none of this has been measured on the board yet.
 | Stop, core + RTC on LSI | ~1 µA (datasheet) |
 | **VREFINT buffer left on in Stop** | **3.0 µA** — the largest single item, so it is switched off before every sleep and brought back (3 ms) by the battery read |
 | ADC in Stop | not a listed adder; the ADC's own regulator is left alone |
+| IWDG running through Stop | ~0.2 µA: Standby with IWDG + LSI on is 0.8 µA against 0.23 µA off, and LSI (0.4 µA) already runs the RTC |
+| Waking every 10 s to feed it | tens of nA on average: a clock restart and a few register writes per wake |
 | T3-3S, connected | 48 mA average, 300 mA peak |
+
+Against the ~120 µA measured at the cell in sleep (the boost's own quiescent
+current dominates), the watchdog costs under 0.3 %.
 
 Three ordering rules in the code exist for power or for the hardware, not for
 style:
@@ -269,6 +363,16 @@ style:
    powered is the one mistake that empties the cell outright.
 4. **The sag monitor never runs into a sleep.** The window stops it once the
    supply is off, and `BSP_McuSleep` halts it first anyway (below).
+5. **The watchdog is fed through the sleep, in 10 s chunks.** It runs through Stop
+   and the L0 has no option to pause it there, so `BSP_McuSleep` takes the sleep
+   as a run of Stops of at most `SLEEP_CHUNK_MAX_MS` with a feed after each.
+   Since the RTC and the IWDG both count LSI, the timeout (LSI/256 × 4096) is
+   28.4 RTC seconds whatever LSI really runs at, so 10 leaves nearly 3× margin. A
+   chunk is fed only if the RTC says time passed: a wakeup that fires at once, or
+   a calendar that has stopped, would otherwise spin there with the watchdog
+   content. Only the button ends the sleep early (`button_woke`, set by the EXTI
+   callback). The latched `button_event` would not do: a glitch the debounce
+   hasn't seen yet would end every chunk after it.
 
 ### The sag monitor: the cell's minimum under load
 
@@ -442,13 +546,21 @@ Current figures (Debug, `-Os -flto`):
 
 ```
    text    data     bss     dec     hex
-  13860       8    1648   15516    3c9c
+  15748       8    1712   17468    443c
 ```
 
 `bss` includes the linker script's 1024-byte `._user_heap_stack` reservation, so
-static RAM is ~632 bytes and the stack has ~1410 available. Flash is 13.9 KB of
-16 KB, leaving ~2.5 KB. (When `-Os` gave 12.5 KB, the same tree at `-O2` was
-13.6 KB, so expect about 1.1 KB more at `-O2`.)
+static RAM is ~696 bytes and the stack has ~1340 available. **Flash is 15.4 KB of
+16 KB, leaving ~630 bytes.** (When `-Os` gave 12.5 KB, the same tree at `-O2` was
+13.6 KB, so `-O2` no longer fits.)
+
+The 2026-11-11 robustness work cost 1,888 bytes, up from 13,860: the watchdog and
+chunked sleep, the I2C bus recovery (~200 B with the HAL de-init it pulls in), the
+synchronous report and the string DP (~370 B in `ReportDps`), and the diagnostic
+record (~400 B, most of it the hand-rolled formatting, which is still far
+cheaper than any printf). The next feature will have to find its own room.
+Candidates: `HAL_I2C_DeInit` replaced by register writes, `HAL_GPIO_Init` calls
+by direct MODER writes in the recovery.
 
 **If the link starts failing on `region RAM overflowed`, the first place to look
 is `WIFI_UART_RECV_BUF_LMT` / `WIFI_DATA_PROCESS_LMT` in
@@ -497,7 +609,7 @@ code and are left alone on purpose.
 
 ## 8. Tests
 
-`libs/build_and_test.bat` — 152 GoogleTest cases, ~2.8 s, run from **PowerShell or
+`libs/build_and_test.bat` — 171 GoogleTest cases, ~3.5 s, run from **PowerShell or
 cmd, not Git Bash** (the preset pins MSYS2 UCRT64 and Git Bash's environment leaks
 into it, killing every link step).
 
@@ -511,17 +623,21 @@ asserts is what only exists once the steps are in a line: when the radio comes u
 how long each wait is given, what is measured before the load is switched on, and
 that the module is never left powered.
 
+The mock watchdog records the longest stretch of awake time between two feeds,
+so "nothing waits unwatched" is a test (`NothingTheCycleDoesAwakeGoesLongUnfed`),
+not a promise. The tests added on 2026-11-11 were each checked by breaking the
+code they cover (18 deliberate changes, every one caught).
+
 ## 9. Things deliberately not done
 
-- **No watchdog.** IWDG on this part maxes out around 26 s against a 5-minute
-  sleep, so it would have to be re-armed on every RTC wake and would not cover the
-  sleep itself. Worth revisiting if field units are seen to wedge.
-- **No persistent settings.** All six DPs are report-only; nothing comes down
+- **No persistent settings.** All seven DPs are report-only; nothing comes down
   from the cloud, so there is nothing to store. The part's 128 bytes of EEPROM are
-  untouched.
-- **No I2C bus recovery.** An MCU reset in the middle of a sensor read could in
-  principle leave the HDC3020 holding SDA. Not observed; a nine-clock recovery in
-  `BSP_Init` is the fix if it ever is.
+  untouched. (The diagnostic record lives in RTC backup registers instead: it
+  only has to survive a reset, not a power-off.)
+- **No HardFault program counter.** `BSP_FatalReset` marks the reset as a fault
+  but doesn't record where. On a Cortex-M0+ the stacked PC needs a naked
+  handler, and CubeMX owns `HardFault_Handler`. Add it if `r=flt` ever shows up
+  in the log.
 - **No battery hysteresis.** The three-level DP is derived statelessly from the
   percentage. Reports are minutes to hours apart, so a level sitting exactly on a
   threshold alternates slowly rather than flapping. Add hysteresis if a bench
@@ -547,14 +663,23 @@ module's first heartbeat to its first state report, and ~9 s from "configured" t
 "cloud" — which is why the alive timeout is 15 s.
 
 Not yet checked on hardware either: what state the module reports on the boot after
-a pairing window nobody finished. Not reporting while unpaired (§4) relies on two
-things:
+a pairing window nobody finished. Checking back while unpaired (§4) relies on it
+less than the old latch did, but it still matters:
 
 - **A module with no network** should come back in a pairing state (0x00, 0x01 or
   0x06), not 0x02. If it reports 0x02, it looks like a down router and gets the
-  backoff: about 12 full 29 s windows a day instead of none.
-- **A module that was paired** must not. The pairing window cuts power at about
+  backoff: about 12 full 29 s windows a day instead of 12 short ones.
+- **A module that was paired** should not. The pairing window cuts power at about
   the moment anti-misoperation mode would restore the old network. Tuya documents
   that a power cycle after a reset and before re-pairing also restores it. If this
-  module firmware doesn't, a stray press would leave a paired device silent until
-  someone pairs it again.
+  module firmware doesn't, a stray press would leave the device unpaired. Before
+  2026-11-11 that meant silent until someone paired it again. Now it shows up in
+  DP 104 (`u=`, `m=01`) of a pairing that gets through, and the device keeps
+  asking every 2 h in the meantime.
+
+Also unverified: **whether module firmware 3.0.93 answers a synchronous report**
+(cmd 0x22) at all (§4, "Delivered means the module said so"). If it doesn't,
+every run spends one 6 s wait finding out and then reports as before. And
+**whether the RTC backup registers ride through the Reset button on this board**:
+RM0377 says they do. The first report after a press should read `r=pin` with
+`c` above 1 if they do, and `r=pin c=1` after a long run if they don't.

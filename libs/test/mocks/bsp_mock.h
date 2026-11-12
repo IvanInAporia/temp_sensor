@@ -25,6 +25,24 @@ void bspMockReset(void);
 void     bspMockAdvanceMs(uint32_t ms);
 uint32_t bspMockNowMs(void);
 
+/* --- Watchdog ------------------------------------------------------------- */
+
+int bspMockWatchdogRefreshCalls(void);
+
+/* The longest stretch of awake time between two feeds since the last
+ * bspMockWatchdogStartMeasuring (or the reset). A sleep counts as fed, as
+ * bsp.h has the real BSP_McuSleep feed it through the sleep.
+ */
+uint32_t bspMockWatchdogLongestGapMs(void);
+void     bspMockWatchdogStartMeasuring(void);
+
+/* --- Retained words ------------------------------------------------------- */
+
+/* bspMockReset is a power-on and clears them; TempSensorInit alone is a reset
+ * that keeps the power, and leaves them alone, as the device does. */
+void     bspMockSetRetained(uint8_t index, uint32_t value);
+uint32_t bspMockRetained(uint8_t index);
+
 /* --- Sleep ---------------------------------------------------------------- */
 
 int      bspMockSleepCalls(void);
@@ -52,6 +70,12 @@ void bspMockSensorSetResponse(const uint8_t* bytes, uint16_t len);
 /* Make the next write (or read) fail, as a NACK or bus error would. */
 void bspMockSensorSetWriteFails(bool fails);
 void bspMockSensorSetReadFails(bool fails);
+
+/* Lock the bus up: every transfer fails until BSP_Sensor_RecoverBus is called,
+ * as a controller stuck "busy" after a glitch does on the device.
+ */
+void bspMockSensorLockBus(void);
+int  bspMockSensorRecoverCalls(void);
 
 int     bspMockSensorWriteCalls(void);
 int     bspMockSensorReadCalls(void);

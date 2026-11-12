@@ -23,13 +23,16 @@ or double-click `fetch_logs.bat`. For each device it:
   has stopped reporting shows up as a large "h ago".
 
 ```
-front: 3 new report(s); last report 2026-11-07 07:22, 2.1 h ago
-  time               min mV   avg mV   batt %    state  damaged   temp C     rh %
-  2026-11-07 05:38      387      736        0      low       on     19.8       52
+kitchen: 3 new report(s); last report 2026-11-12 09:40, 0.3 h ago
+  time               min mV   avg mV   batt %    state  damaged   temp C     rh %     diag
+  2026-11-12 09:40        .     1298       94     high      off     22.4       63     r=pin c=17 w=3 u=0 m=02 s=0
 ```
 
 A `.` is a DP that the report did not include. DP 101 is not sent at 1000 mV or
-above, for example.
+above, for example, and DP 104 (`diag`) only when there is something to say:
+after a reset, or after report windows or sensor reads failed. Its fields are
+explained at the top of
+[`libs/src/report/diag_record.h`](../../libs/src/report/diag_record.h).
 
 Options: `--show N` prints each device's last N reports, new or not.
 `--days N` sets how far back a device's first run goes. `--help` lists the rest.
@@ -75,8 +78,8 @@ and 3 are done.
    this product (Tuya's guide:
    [Change Control Instruction Mode](https://developer.tuya.com/en/docs/iot/change-control-instruction-mode?id=Kcbz8lahbg5st)).
    - In the default *standard instruction* mode, the cloud renames DPs 1 and 2
-     to `va_temperature` / `va_humidity` and doesn't log DPs 101–103 at all.
-     The script then warns, and the min/avg/damaged columns stay `.`.
+     to `va_temperature` / `va_humidity` and doesn't log DPs 101–104 at all.
+     The script then warns, and the min/avg/damaged/diag columns stay `.`.
    - In DP mode it uses the product's own identifiers. On the platform DP 101's
      is spelled `batter_min_voltage`; the script accepts either spelling.
    - The setting only changes what the cloud API shows. The app and the device

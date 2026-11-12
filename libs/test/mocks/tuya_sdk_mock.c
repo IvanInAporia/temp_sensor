@@ -1,6 +1,8 @@
 #include "tuya_sdk_mock.h"
 
+#include "protocol.h" /* ahead of mcu_api.h, as in tuya_link.c */
 #include "mcu_api.h"
+#include "tuya_link.h"
 #include "wifi.h"
 
 #include <string.h>
@@ -10,6 +12,17 @@
  * a window, so this covers twenty windows. */
 #define DP_CAPACITY 128
 #define RX_CAPACITY 256
+
+#define STRING_CAPACITY 32
+#define STRING_MAX      47
+
+static char strings[STRING_CAPACITY][STRING_MAX + 1];
+static int  string_count;
+
+static TuyaSdkMockSyncAnswer sync_answer;
+
+/* Synchronous reports sent and not yet answered. */
+static int sync_pending;
 
 static uint8_t wifi_state;
 
@@ -56,6 +69,17 @@ void tuyaSdkMockReset(void)
 
     memset(dps, 0, sizeof(dps));
     dp_count = 0;
+
+    memset(strings, 0, sizeof(strings));
+    string_count = 0;
+
+    sync_answer  = TUYA_MOCK_SYNC_SILENT;
+    sync_pending = 0;
+}
+
+void tuyaSdkMockSetSyncAnswer(TuyaSdkMockSyncAnswer answer)
+{
+    sync_answer = answer;
 }
 
 void tuyaSdkMockSetWifiState(uint8_t state)
@@ -93,6 +117,9 @@ void wifi_protocol_init(void)
 {
     protocol_init_calls++;
 
+    /* The module that owed an answer has been powered off. */
+    sync_pending = 0;
+
     /* The real one drops the ring and resets the cached work state, which is
      * exactly why Tuya_PowerOn has to call it on every window. Modelled,
      * because a test that asserts "the glue does not believe a cold-booting
@@ -110,6 +137,15 @@ void wifi_uart_service(void)
     {
         wifi_state     = schedule_state;
         schedule_armed = false;
+    }
+
+    /* One answer per pass, as the real one parses one 0x23 frame per answer.
+     * On the target, system.c hands it to get_upload_syn_result (protocol.c),
+     * which forwards it here unchanged. */
+    if ((sync_pending > 0) && (sync_answer != TUYA_MOCK_SYNC_SILENT))
+    {
+        sync_pending--;
+        Tuya_OnSyncResult((sync_answer == TUYA_MOCK_SYNC_TAKEN) ? 1u : 0u);
     }
 }
 
@@ -147,10 +183,42 @@ static void RecordDp(uint8_t dpid, bool is_enum, uint32_t value)
     {
         dps[dp_count].dpid    = dpid;
         dps[dp_count].is_enum = is_enum;
+        dps[dp_count].sync    = false;
         dps[dp_count].value   = value;
     }
 
     dp_count++;
+}
+
+u8 mcu_dp_value_update_syn(u8 dpid, u32 value)
+{
+    RecordDp((uint8_t) dpid, false, (uint32_t) value);
+
+    if (dp_count <= DP_CAPACITY)
+    {
+        dps[dp_count - 1].sync = true;
+    }
+
+    sync_pending++;
+
+    return SUCCESS;
+}
+
+u8 mcu_dp_string_update(u8 dpid, const u8 value[], u16 len)
+{
+    RecordDp((uint8_t) dpid, false, (uint32_t) len);
+
+    if (string_count < STRING_CAPACITY)
+    {
+        uint16_t kept = (len > STRING_MAX) ? STRING_MAX : len;
+
+        memcpy(strings[string_count], value, kept);
+        strings[string_count][kept] = '\0';
+    }
+
+    string_count++;
+
+    return SUCCESS;
 }
 
 u8 mcu_dp_value_update(u8 dpid, u32 value)
@@ -224,6 +292,21 @@ bool tuyaSdkMockDpAt(int index, TuyaSdkMockDp* out)
     *out = dps[index];
 
     return true;
+}
+
+int tuyaSdkMockStringCount(void)
+{
+    return string_count;
+}
+
+const char* tuyaSdkMockStringAt(int index)
+{
+    if ((index < 0) || (index >= string_count) || (index >= STRING_CAPACITY))
+    {
+        return "";
+    }
+
+    return strings[index];
 }
 
 bool tuyaSdkMockLastDpValue(uint8_t dpid, uint32_t* out_value)

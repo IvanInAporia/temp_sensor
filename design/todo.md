@@ -14,7 +14,8 @@ Each item is meant to be one session. When an item is done, update
 tick it off here.
 
 Suggested order: 1a → 1b → 1c → 2 → 4. Item 5 doesn't depend on anything. Item 3 was
-dropped on 2026-10-11; item 2's 4 h report covers it.
+dropped on 2026-10-11; item 2's 4 h report covers it. Item 6 came out of the kitchen
+board's silence on 2026-11-11 and was done the same day, together with item 5.
 
 The checks that need the board, the Tuya app or the MCU simulator are collected in
 [Hardware and manual checks](#hardware-and-manual-checks) at the end, to do once the code
@@ -85,6 +86,11 @@ capture (`temp_sensor_provision_with_mcu_simulation.txt`), an unpaired module re
 - Clear the flag only when a pairing window reaches the cloud.
 - After a battery swap (MCU reset) the device learns the state again with one short window
   of about 4 s. No EEPROM needed.
+
+**Changed 2026-11-11 (item 6):** the flag is gone. A window that finds the module unpaired
+now starts the backoff's 2 h pause, without spending a quick retry, and the device checks
+back at the end of every pause. A latch that only Reset or a pairing could clear was one
+of the three ways the kitchen board could have gone silent on 11-11.
 
 **Check on hardware:** the state an unfinished pairing window leaves, in
 [Hardware and manual checks](#hardware-and-manual-checks).
@@ -246,7 +252,13 @@ hold-off, faster readings catch more heating/cooling swings and send more report
 
 ## 5. Synchronous DP report: commit on the module's ack and power off right away
 
-- [ ] Done
+- [x] Done 2026-11-11, in firmware_design.md §4 "Delivered means the module said so". Two
+  changes from the design below. **One** synchronous report, not four: the SDK's notes
+  (protocol.h, item 14) allow no second before the first is answered, and the module takes
+  up to 5 s. So the temperature goes last and its answer covers the plain reports sent
+  ahead of it. And the fallback is learned once per run: a module that has never answered
+  gets the old rule and isn't asked again until a reset; one that has answered before
+  and then doesn't is a failed window. The ack wait is 6 s, past the module's own 5 s.
 
 **Why.** Today a report counts as sent as soon as the cloud is connected, followed by a
 fixed 2 s `WIFI_DRAIN_MS`. With synchronous reporting (cmd 0x22, module answers 0x23 with
@@ -268,6 +280,36 @@ soon as the ack arrives instead of waiting the fixed 2 s.
 
 **Check on hardware:** whether module firmware 3.0.93 answers 0x22 at all, in
 [Hardware and manual checks](#hardware-and-manual-checks).
+
+## 6. No state that only the Reset button clears
+
+- [x] Done 2026-11-11
+
+**Why.** On 2026-11-11 every board lost the cloud from about 00:35 to 07:50 (a
+house-wide outage). The others came back by themselves within their 2 h pause. The
+kitchen board made contact once at about 07:53 (an offline event in the Tuya log with no
+online and no DPs), then nothing until its Reset button was pressed at 16:42, when it
+reported at once. Its firmware predates item 2, so part of the silence may simply have
+been a steady room. But the firmware had three states that only a reset clears, and the
+cloud log can't say which, if any, it was in:
+- the unpaired latch (item 1b), set by one unpaired answer from the module,
+- an I2C bus left busy, after which every read fails and no report is ever due,
+- a hang or HardFault: no watchdog, and both fault handlers spun forever.
+
+**Done.**
+- Unpaired is re-checked every 2 h (item 1b's note).
+- A failed sensor read resets the I2C controller and clocks out a sensor holding SDA
+  (`BSP_Sensor_RecoverBus`). So does every boot.
+- An IWDG watchdog (18–40 s depending on LSI). It is fed by `Tuya_WaitUntil` and through
+  the sleep in 10 s Stops, and only when time really passed. `HardFault_Handler` and
+  `Error_Handler` reset the board instead of spinning, and mark the reset as a fault.
+- DP 104 `diagnostics`, a line of text that says what happened since the last delivered
+  report: why the board restarted, cycles run, failed windows, what state the module was
+  in, and failed sensor reads. Kept in the RTC backup registers, so the report after the
+  Reset button says what came before it.
+- `tools/tuya_logs` shows DP 104 as the `diag` column.
+
+**Checks on hardware:** item 6, in [Hardware and manual checks](#hardware-and-manual-checks).
 
 ---
 
@@ -321,9 +363,42 @@ the room moves faster than the interpolated replay assumed; the hold-off
 
 - [ ] Done
 
-Test it with the Tuya MCU simulator or a logic capture. If the module ignores the command,
-every window falls back to committing on cloud-connected, so item 5's code adds nothing and
-is worth taking back out.
+The code is in (item 5), with a fallback for a module that doesn't answer. To tell which
+one this is, capture one report window's UART (logic analyser on PA2/PA3), or time the
+module's rail on the scope:
+- **It answers:** a frame with command byte 0x23 and one data byte (`55 AA vv 23 00 01 01 cs`,
+  `01` taken, `00` refused) comes back after the 0x22. The rail drops right after it, with
+  no 2 s tail.
+- **It doesn't:** no 0x23. The first window of a run stays up about 6 s after the push,
+  and later windows have the 2 s tail.
+
+If it never answers, item 5's code costs one 6 s wait per boot and about 100 bytes, and
+can come out. If it answers 0 (refused) on a healthy network, look at the frame before
+deciding anything.
+
+### 6: the platform, the Reset button and the watchdog
+
+- [ ] Done
+
+1. **Add DP 104 on the platform** before flashing: ID 104, identifier `diagnostics`,
+   String, report only, max length 40. Without it the cloud drops the DP and nothing else
+   changes. Then fetch the logs: the first report after flashing should carry
+   `r=pin c=1 ...` or `r=sw c=1 ...`, depending on how the debugger resets.
+2. **The backup registers survive the Reset button.** Let a board run an hour, press
+   Reset, fetch the logs: expect `r=pin` with `c` around 12, not 1. If `c=1`, the
+   registers are being cleared at boot and the record is useless after a reset. Check
+   `HAL_RCCEx_PeriphCLKConfig`'s RTC domain reset first.
+3. **Sleep current unchanged.** The 10 s Stop chunks should add tens of nA to the ~120 µA
+   at the cell. The module plays no part in this: it is off during sleep, and the chunks
+   and the watchdog live in `BSP_McuSleep` and `BSP_Init`. So a sleep-only build like the
+   11-03 one, with the module never powered, measures exactly what changed. That build
+   must sleep through `BSP_McuSleep`, not call `HAL_PWR_EnterSTOPMode` directly, or the
+   watchdog resets it every ~28 s. If the current moved by more than a few µA, look at
+   what `SystemClock_Config` waits on after each wake.
+4. **The watchdog fires.** In a scratch build only, add `while (1) {}` after the third
+   cycle. The board should reset within 20–40 s and the next report read `r=wdg`.
+5. **The bus recovery.** Briefly short SDA to ground with a jumper during a cycle. Expect
+   the next DP 104 to show `s=1` and readings to resume on the next cycle.
 
 ### Sag monitor: DP 101 against the scope
 

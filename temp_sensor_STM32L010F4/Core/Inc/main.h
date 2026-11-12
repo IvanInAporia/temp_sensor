@@ -57,6 +57,10 @@ void Error_Handler(void);
 void Wifi_RailOn(void);
 void Wifi_RailOff(void);
 
+/* bsp_stm32.c: mark the reset as a fault and reset.  For the HardFault
+   handler and Error_Handler, which used to spin forever. */
+void BSP_FatalReset(void) __attribute__((noreturn));
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

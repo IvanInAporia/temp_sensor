@@ -48,6 +48,10 @@ void Tuya_Service(void);
  * a spin. This is the blocking primitive the whole cycle is written in terms
  * of -- see temp_sensor_main.c.
  *
+ * Feeds the watchdog on every pass, which is safe only because every wait has
+ * a deadline: a three-minute pairing window is longer than the watchdog's
+ * timeout, and this is where it is spent.
+ *
  * A NULL `condition` never becomes true, which is how Tuya_ServiceFor() is
  * built: waiting out a fixed span while keeping the SDK fed.
  */
@@ -86,6 +90,13 @@ bool Tuya_IsCloudConnected(void);
  * so. False before that, when nothing is known yet.
  */
 bool Tuya_IsUnpaired(void);
+
+/* The Wi-Fi state the module last reported, as the SDK numbers it (wifi.h:
+ * 0x02 no router, 0x03 router, 0x04 cloud, 0x00/0x01/0x06 pairing), or 0xFF if
+ * it has said nothing since Tuya_PowerOn. Still readable after Tuya_PowerOff,
+ * which is when the diagnostic record (diag_record.h) wants it.
+ */
+uint8_t Tuya_WifiState(void);
 
 /* Put the module into pairing mode. Requires Tuya_IsAlive().
  *
@@ -133,13 +144,46 @@ void Tuya_SetDps(int16_t temp_c10,
  */
 void Tuya_SetBatteryMinMv(uint16_t min_mv, uint16_t average_min_mv);
 
+/* Cache the diagnostic text, DP 104 (diag_record.h), or `len` 0 for none.
+ * At most DIAG_TEXT_MAX bytes; anything longer is cut. Does not transmit, and
+ * like the others, call it only with the module unpowered.
+ */
+void Tuya_SetDiag(const char* text, uint8_t len);
+
 /* Push the cached readings to the module.
  *
- * Called by the cycle once the cloud is up, and by the SDK itself
- * (all_data_update in ../../../tuya/protocol.c) whenever the module asks for
- * everything. Sends no readings until Tuya_SetDps() has supplied a set, so a
- * query arriving before the first measurement reports nothing rather than
- * zeroes -- and, the same way, no DP 101 while its value is 0 or 1000 mV and
- * above, and no DP 103 while its value is 0.
+ * Called by the SDK itself (all_data_update in ../../../tuya/protocol.c)
+ * whenever the module asks for everything, and by the cycle once the cloud is
+ * up. Sends no readings until Tuya_SetDps() has supplied a set, so a query
+ * arriving before the first measurement reports nothing rather than zeroes --
+ * and, the same way, no DP 101 while its value is 0 or 1000 mV and above, no
+ * DP 103 while its value is 0, and no DP 104 while there is no text.
  */
 void Tuya_ReportCachedDps(void);
+
+/* The same push, but the temperature (DP 1) goes out last, as a synchronous
+ * report (cmd 0x22): the module answers it (0x23) once the cloud has taken it,
+ * or with a refusal if it could not deliver it within 5 s. Everything else
+ * goes ahead of it as plain reports on the same connection, so that one
+ * answer covers the whole push.
+ *
+ * Only one: the SDK allows no second synchronous report before the first is
+ * answered (protocol.h, item 14).
+ *
+ * Returns at once; Tuya_ReportAnswered says when the answer is in, and
+ * Tuya_ReportConfirmed whether it said yes. With no readings cached there is
+ * nothing to confirm, and this is plain Tuya_ReportCachedDps.
+ */
+void Tuya_ReportCachedDpsWithAck(void);
+
+/* The push from Tuya_ReportCachedDpsWithAck has been answered. False before
+ * any such push in this window. */
+bool Tuya_ReportAnswered(void);
+
+/* ...and the answer was not a refusal. */
+bool Tuya_ReportConfirmed(void);
+
+/* The module's answer to one synchronous report: 1 taken, 0 refused. Called
+ * by the SDK (get_upload_syn_result in ../../../tuya/protocol.c), from inside
+ * Tuya_Service(). */
+void Tuya_OnSyncResult(uint8_t result);

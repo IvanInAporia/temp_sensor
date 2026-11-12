@@ -16,4 +16,5 @@ target_include_directories(tuya_link
 target_link_libraries(tuya_link
   bsp_interface
   battery
+  diag_record
 )

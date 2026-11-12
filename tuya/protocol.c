@@ -94,6 +94,7 @@ const DOWNLOAD_CMD_S download_cmd[] =
   {DPID_BATTERY_MIN_VOLTAGE, DP_TYPE_VALUE},
   {DPID_BATTERY_DAMAGED, DP_TYPE_BOOL},
   {DPID_BATTERY_AVG_MIN_VOLTAGE, DP_TYPE_VALUE},
+  {DPID_DIAG, DP_TYPE_STRING},
 };
 
 #endif
@@ -497,17 +498,11 @@ void weather_data_user_handle(i8* name, u8 type, const u8* weather_data, i8 day)
  * @note   The MCU needs to implement this function.
  */
 void get_upload_syn_result(u8 result) {
-#ifndef CONFIG_TUYA_DISABLE_ALL_ERROR_MARCO
-#error "Please complete the status synchronous upload result code yourself and delete this line"
-#endif
-
-    if (result == 0) {
-        // Synchronous upload error
-        TUYA_DBG_EXEC(TUYA_PRINT("Sync report dp FAILED."));
-    } else {
-        // Synchronous upload successful
-        TUYA_DBG_EXEC(TUYA_PRINT("Sync report dp SUCCESSFUL."));
-    }
+    /* PORTED: the module's answer to the cycle's synchronous temperature
+       report.  Runs inside wifi_uart_service(), i.e. inside Tuya_Service(),
+       so it only records the answer; the cycle reads it back through
+       Tuya_ReportAnswered()/Tuya_ReportConfirmed(). */
+    Tuya_OnSyncResult(result);
 }
 #endif
 

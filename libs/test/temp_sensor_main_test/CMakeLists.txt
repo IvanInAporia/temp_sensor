@@ -19,6 +19,7 @@ target_link_libraries(temp_sensor_main_test
   hdc3020
   battery
   report_policy
+  diag_record
   tuya_link
   tuya_sdk_mock
   bsp_mock

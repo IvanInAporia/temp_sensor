@@ -18,12 +18,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Why the MCU last started. The values go out in the diagnostic DP
+ * (diag_record.h), so append rather than reorder.
+ */
 typedef enum {
-    BSP_Reset_None,
+    BSP_Reset_None,      /* no flag set: should not happen */
     BSP_Reset_LowPower,
-    BSP_Reset_IWatchdog,
+    BSP_Reset_IWatchdog, /* the watchdog: something stopped making progress */
     BSP_Reset_Software,
-    BSP_Reset_PowerOn,
+    BSP_Reset_PowerOn,   /* power-on or brown-out: a battery swap, or a sag deep enough */
+    BSP_Reset_Pin,       /* the Reset button, or a debugger */
+    BSP_Reset_Fault,     /* a HardFault or a failed HAL call, turned into a reset */
 } BSP_ResetType;
 
 /* Callback function type for any BSP operation that needs a callback. Runs in
@@ -85,6 +90,10 @@ void BSP_Idle(void);
  * implementation with no early wake source may simply return `sleep_time_ms`.
  *
  * BSP_GetTimeMs() is advanced by the same amount before this returns.
+ *
+ * Keeps the watchdog fed itself, however long the sleep: the caller cannot,
+ * since it is not running. A sleep that never ends -- a wakeup that never
+ * fires -- is one of the things the watchdog is there to catch.
  */
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms);
 
@@ -96,6 +105,31 @@ void BSP_McuReset(void);
  * whole run rather than only until something clears the flags.
  */
 BSP_ResetType BSP_GetResetReason(void);
+
+/* --- Watchdog ---------------------------------------------------------------
+ *
+ * Started by BSP_Init and never stopped. Nothing in the firmware is meant to
+ * wait without a deadline, so anything that stops calling this for long enough
+ * -- a hang in a vendor library, a fault loop, a clock that never comes back
+ * -- resets the board, and BSP_GetResetReason says so on the next run.
+ *
+ * The timeout is the implementation's (around 20-40 s on the STM32). Callers
+ * feed it from every loop that waits awake; BSP_McuSleep feeds it through the
+ * sleep.
+ */
+void BSP_Watchdog_Refresh(void);
+
+/* --- Retained words ---------------------------------------------------------
+ *
+ * A few words that survive any reset that keeps the power on: the Reset button,
+ * the watchdog, a fault. After a power-on they hold anything, usually zero, so
+ * whoever stores something here must be able to tell (diag_record.c checks a
+ * checksum).
+ */
+#define BSP_RETAINED_WORDS 3u
+
+uint32_t BSP_Retained_Read(uint8_t index);
+void     BSP_Retained_Write(uint8_t index, uint32_t value);
 
 /* --- Sensor bus -------------------------------------------------------------
  *
@@ -109,6 +143,17 @@ BSP_ResetType BSP_GetResetReason(void);
  */
 bool BSP_Sensor_I2cWrite(uint8_t address, const uint8_t* data, uint16_t len);
 bool BSP_Sensor_I2cRead(uint8_t address, uint8_t* data, uint16_t len);
+
+/* Put the bus back to idle after a transfer failed: reset the controller, and
+ * clock out a device left holding SDA low partway through a byte.
+ *
+ * Either can outlast the transfer that caused it. A glitch on the lines can
+ * leave the controller believing the bus is busy, and every transfer after
+ * that fails the same way until something resets it; a device reset or
+ * interrupted mid-byte waits for clocks that never come. Without this, the
+ * first sensor failure could be the last reading.
+ */
+void BSP_Sensor_RecoverBus(void);
 
 /* --- Wi-Fi module (Tuya T3-3S) ----------------------------------------------
  *

@@ -57,7 +57,8 @@ uint8_t tuyaSdkMockRxByteAt(int index);
 typedef struct {
     uint8_t  dpid;
     bool     is_enum;
-    uint32_t value; /* the raw value as it would go on the wire */
+    bool     sync;  /* sent as a synchronous report (0x22), asking for an answer */
+    uint32_t value; /* the raw value as it would go on the wire; a string's length */
 } TuyaSdkMockDp;
 
 int  tuyaSdkMockDpCount(void);
@@ -65,6 +66,27 @@ bool tuyaSdkMockDpAt(int index, TuyaSdkMockDp* out);
 
 /* The most recent value reported for `dpid`, or false if it was never sent. */
 bool tuyaSdkMockLastDpValue(uint8_t dpid, uint32_t* out_value);
+
+/* String DPs, in the order they went out. The text is kept, terminated, up to
+ * 47 characters; a test reads back what the cloud log would show. */
+int         tuyaSdkMockStringCount(void);
+const char* tuyaSdkMockStringAt(int index);
+
+/* --- The module's answer to a synchronous report ------------------------------ */
+
+typedef enum {
+    TUYA_MOCK_SYNC_SILENT,  /* never answers: a module firmware without 0x22 */
+    TUYA_MOCK_SYNC_TAKEN,   /* answers 1 */
+    TUYA_MOCK_SYNC_REFUSED, /* answers 0: could not deliver it */
+} TuyaSdkMockSyncAnswer;
+
+/* How the module answers every synchronous report from now on. The answer
+ * arrives on the next wifi_uart_service() pass, through Tuya_OnSyncResult --
+ * where the real SDK's get_upload_syn_result (protocol.c) sends it. Starts
+ * TUYA_MOCK_SYNC_SILENT, which is how the module behaved before the cycle
+ * asked for answers.
+ */
+void tuyaSdkMockSetSyncAnswer(TuyaSdkMockSyncAnswer answer);
 
 #ifdef __cplusplus
 }

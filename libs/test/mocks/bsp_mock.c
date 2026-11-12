@@ -57,9 +57,29 @@ static BSP_ResetType reset_reason;
 static int           reset_calls;
 static bool          spare_set;
 
+static int      watchdog_refresh_calls;
+static uint32_t watchdog_last_ms;
+static uint32_t watchdog_longest_gap_ms;
+
+static uint32_t retained[BSP_RETAINED_WORDS];
+
+static int  sensor_recover_calls;
+static bool sensor_bus_stuck;
+
 void bspMockReset(void)
 {
     now_ms = 0u;
+
+    watchdog_refresh_calls  = 0;
+    watchdog_last_ms        = 0u;
+    watchdog_longest_gap_ms = 0u;
+
+    /* A power-on: what the retained words hold now is whatever the RAM came up
+     * with, which on the bench is mostly zero. */
+    memset(retained, 0, sizeof(retained));
+
+    sensor_recover_calls = 0;
+    sensor_bus_stuck     = false;
 
     sleep_calls              = 0;
     last_sleep_request_ms    = 0u;
@@ -149,6 +169,64 @@ uint32_t bspMockNowMs(void)
 
 /* --- Sleep ---------------------------------------------------------------- */
 
+/* --- Watchdog ------------------------------------------------------------- */
+
+void BSP_Watchdog_Refresh(void)
+{
+    uint32_t gap_ms = now_ms - watchdog_last_ms;
+
+    if (gap_ms > watchdog_longest_gap_ms)
+    {
+        watchdog_longest_gap_ms = gap_ms;
+    }
+
+    watchdog_last_ms = now_ms;
+    watchdog_refresh_calls++;
+}
+
+int bspMockWatchdogRefreshCalls(void)
+{
+    return watchdog_refresh_calls;
+}
+
+uint32_t bspMockWatchdogLongestGapMs(void)
+{
+    return watchdog_longest_gap_ms;
+}
+
+void bspMockWatchdogStartMeasuring(void)
+{
+    watchdog_last_ms        = now_ms;
+    watchdog_longest_gap_ms = 0u;
+}
+
+/* --- Retained words ------------------------------------------------------- */
+
+uint32_t BSP_Retained_Read(uint8_t index)
+{
+    return (index < BSP_RETAINED_WORDS) ? retained[index] : 0u;
+}
+
+void BSP_Retained_Write(uint8_t index, uint32_t value)
+{
+    if (index < BSP_RETAINED_WORDS)
+    {
+        retained[index] = value;
+    }
+}
+
+void bspMockSetRetained(uint8_t index, uint32_t value)
+{
+    BSP_Retained_Write(index, value);
+}
+
+uint32_t bspMockRetained(uint8_t index)
+{
+    return BSP_Retained_Read(index);
+}
+
+/* --- Sleep ---------------------------------------------------------------- */
+
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 {
     /* Counted, then stopped as the real one stops it. */
@@ -157,6 +235,11 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
         sleeps_with_sag_running++;
         sag_running = false;
     }
+
+    /* bsp.h has the real one feed the watchdog through the sleep, in chunks.
+     * So the stretch awake up to here is measured, and the sleep itself is
+     * not. */
+    BSP_Watchdog_Refresh();
 
     sleep_calls++;
     last_sleep_request_ms = sleep_time_ms;
@@ -171,6 +254,8 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
     }
 
     now_ms += slept_ms;
+
+    watchdog_last_ms = now_ms;
 
     return slept_ms;
 }
@@ -229,7 +314,7 @@ bool BSP_Sensor_I2cWrite(uint8_t address, const uint8_t* data, uint16_t len)
         sensor_last_cmd_lsb = data[1];
     }
 
-    return !sensor_write_fails;
+    return !sensor_write_fails && !sensor_bus_stuck;
 }
 
 bool BSP_Sensor_I2cRead(uint8_t address, uint8_t* data, uint16_t len)
@@ -237,7 +322,7 @@ bool BSP_Sensor_I2cRead(uint8_t address, uint8_t* data, uint16_t len)
     sensor_read_calls++;
     sensor_last_address = address;
 
-    if (sensor_read_fails || (len > sensor_response_len))
+    if (sensor_read_fails || sensor_bus_stuck || (len > sensor_response_len))
     {
         return false;
     }
@@ -245,6 +330,22 @@ bool BSP_Sensor_I2cRead(uint8_t address, uint8_t* data, uint16_t len)
     memcpy(data, sensor_response, len);
 
     return true;
+}
+
+void BSP_Sensor_RecoverBus(void)
+{
+    sensor_recover_calls++;
+    sensor_bus_stuck = false;
+}
+
+int bspMockSensorRecoverCalls(void)
+{
+    return sensor_recover_calls;
+}
+
+void bspMockSensorLockBus(void)
+{
+    sensor_bus_stuck = true;
 }
 
 void bspMockSensorSetResponse(const uint8_t* bytes, uint16_t len)

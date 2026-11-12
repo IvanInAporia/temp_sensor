@@ -48,10 +48,9 @@ extern __IO uint32_t uwTick;
 /* One byte at 9600 8N1 is 1.04 ms. */
 #define WIFI_TX_TIMEOUT_MS 10u
 
-/* The wakeup timer runs off ck_spre (1 Hz) for anything a second or longer,
- * which covers every sleep this application asks for in a single arming -- up
- * to 65536 s. The alternative, RTCCLK/16, would need eleven wakeups for a
- * five-minute sleep and eleven clock re-inits with them. */
+/* The wakeup timer runs off ck_spre (1 Hz) for anything a second or longer --
+ * every chunk BSP_McuSleep takes (SLEEP_CHUNK_MAX_MS) but a sub-second tail.
+ * The alternative, RTCCLK/16, tops out at 28 s per arming. */
 #define WAKEUP_SECONDS_MIN_MS 1000u
 
 /* RTCCLK/16 with RTCCLK = LSI. The .ioc records LSI at 37 kHz, so 2312.5 Hz;
@@ -64,6 +63,34 @@ extern __IO uint32_t uwTick;
 #define WAKEUP_MAX_SECONDS 65536u
 
 #define MS_PER_DAY (24u * 60u * 60u * 1000u)
+
+/* The watchdog at its longest: LSI/256 and a reload of 4095, i.e. 1,048,576
+ * LSI periods -- 18.7 s at LSI's fastest (56 kHz), 28 s typical, 40 s at its
+ * slowest (26 kHz). PR = 6 is /256 (RM0377 IWDG_PR). */
+#define IWDG_PRESCALER_DIV256 6u
+#define IWDG_RELOAD_MAX       0x0FFFu
+
+/* The key register's three values (RM0377 IWDG_KR). Spelled out because the
+ * HAL IWDG module is not enabled, and three register writes do not need it. */
+#define IWDG_KEY_RELOAD 0xAAAAu
+#define IWDG_KEY_ENABLE 0xCCCCu
+#define IWDG_KEY_ACCESS 0x5555u
+
+/* The longest single Stop. The watchdog runs through Stop and this part cannot
+ * pause it there (no IWDG_STOP option byte on the L0), so a sleep is taken in
+ * chunks with a feed between them.
+ *
+ * The RTC and the watchdog both count LSI, so however fast LSI really runs,
+ * the watchdog's timeout is 1,048,576 / (128 x 288) = 28.4 RTC seconds
+ * (MX_RTC_Init's prescalers). Ten leave it nearly three times over. A wake
+ * every ten seconds costs a clock restart and a few register writes -- tens of
+ * nanoamps on average, against a ~120 uA sleep at the cell. */
+#define SLEEP_CHUNK_MAX_MS 10000u
+
+/* In RTC->BKP4R from BSP_FatalReset until the next BSP_Init: a software reset
+ * that finds it was a fault. BKP0R-BKP2R are the retained words; BKP3R is
+ * spare. */
+#define FAULT_MARKER 0xFA017ED0u
 
 /* The battery channel. The cell is wired straight to PA6 with no divider
  * (schematic net `adc_batt`), which is safe precisely because it is the boost
@@ -95,8 +122,17 @@ extern __IO uint32_t uwTick;
 /* Latched at BSP_Init before anything can clear it. */
 static uint32_t reset_flags;
 
+/* BSP_FatalReset's mark was found at BSP_Init. */
+static bool fault_reset;
+
 /* Written by the EXTI interrupt, read and cleared by the application. */
 static volatile bool button_event;
+
+/* Written by the EXTI interrupt, cleared by BSP_McuSleep before each chunk:
+ * the press is what ended that chunk. Separate from button_event, which stays
+ * latched until the application takes it -- a glitch the debounce has not seen
+ * yet must not end every chunk after it. */
+static volatile bool button_woke;
 
 /* Written from thread context (the BSP_Wifi_* setters) and read from the UART
  * interrupt, so volatile: without it the compiler is free to cache one of
@@ -133,6 +169,7 @@ static bool     sag_running;
 static uint32_t sag_saved_sampling_time;
 
 static void SagMonitorHalt(void);
+static void WatchdogStart(void);
 
 /* --- Init ----------------------------------------------------------------- */
 
@@ -174,6 +211,14 @@ void BSP_Init(void)
   reset_flags = RCC->CSR;
   __HAL_RCC_CLEAR_RESET_FLAGS();
 
+  /* BSP_FatalReset's mark, taken and cleared before anything can fault again.
+     The RTC registers need the backup domain's write protection off;
+     SystemClock_Config has already done it, and saying so here costs one
+     write. */
+  HAL_PWR_EnableBkUpAccess();
+  fault_reset = (RTC->BKP4R == FAULT_MARKER);
+  RTC->BKP4R  = 0u;
+
 #ifndef DEBUG
   /* CubeIDE's "Debug in low power modes" sets DBG_SLEEP/STOP/STANDBY, and only
      a power-on reset clears them -- not the reset button, not a reflash. Left
@@ -208,11 +253,82 @@ void BSP_Init(void)
   (void) HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 
   button_event = false;
+  button_woke  = false;
 
   /* Known-off state. main.c already parks the Wi-Fi rail before calling here;
      doing it again is free and makes this function stand on its own. */
   BSP_Wifi_PowerOff();
   BSP_Spare_Set(false);
+
+  /* A reset can land in the middle of a sensor transfer and leave the HDC3020
+     holding SDA, waiting for clocks that never come. */
+  BSP_Sensor_RecoverBus();
+
+  /* Last, so none of the above counts against it. */
+  WatchdogStart();
+}
+
+/* --- Watchdog and faults -------------------------------------------------- */
+
+static void WatchdogStart(void)
+{
+#ifdef DEBUG
+  /* Frozen while a debugger holds the core, or every breakpoint would end in a
+     reset. Release cannot be halted that way (BSP_Init clears the debug
+     low-power bits), and a frozen watchdog is no watchdog. */
+  __HAL_RCC_DBGMCU_CLK_ENABLE();
+  DBGMCU->APB1FZ |= DBGMCU_APB1_FZ_DBG_IWDG_STOP;
+#endif
+
+  IWDG->KR  = IWDG_KEY_ENABLE;
+  IWDG->KR  = IWDG_KEY_ACCESS;
+  IWDG->PR  = IWDG_PRESCALER_DIV256;
+  IWDG->RLR = IWDG_RELOAD_MAX;
+
+  /* The new values take a few LSI periods (~150 us) to reach the watchdog's
+     own clock domain, and until they do it counts at its reset rate, /4 --
+     under half a second. So wait for them, but not forever: at 16 MHz this
+     bound is tens of milliseconds, a hundred times what the hardware needs. */
+  for (uint32_t i = 0u; (IWDG->SR != 0u) && (i < 100000u); i++)
+  {
+  }
+
+  IWDG->KR = IWDG_KEY_RELOAD;
+}
+
+void BSP_Watchdog_Refresh(void)
+{
+  IWDG->KR = IWDG_KEY_RELOAD;
+}
+
+void BSP_FatalReset(void)
+{
+  __disable_irq();
+
+  /* Plain register writes only: this runs from the HardFault handler, on a
+     stack that may be what faulted. The PWR clock is on from HAL_MspInit, and
+     nothing turns it off. */
+  PWR->CR    |= PWR_CR_DBP;
+  RTC->BKP4R  = FAULT_MARKER;
+
+  NVIC_SystemReset();
+}
+
+/* --- Retained words ------------------------------------------------------- */
+
+/* The RTC's backup registers: in the RTC domain, so they ride through every
+ * reset but a power-on (RM0377, RTC domain reset). Contiguous, BKP0R first. */
+uint32_t BSP_Retained_Read(uint8_t index)
+{
+  return (index < BSP_RETAINED_WORDS) ? (&RTC->BKP0R)[index] : 0u;
+}
+
+void BSP_Retained_Write(uint8_t index, uint32_t value)
+{
+  if (index < BSP_RETAINED_WORDS)
+  {
+    (&RTC->BKP0R)[index] = value;
+  }
 }
 
 /* --- Time, idling and sleep ----------------------------------------------- */
@@ -286,6 +402,8 @@ static uint32_t RtcElapsedMs(uint32_t from_ms, uint32_t to_ms)
   return (to_ms >= from_ms) ? (to_ms - from_ms) : ((to_ms + MS_PER_DAY) - from_ms);
 }
 
+static uint32_t SleepOnce(uint32_t sleep_time_ms);
+
 uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
 {
   /* Never into a sleep with the sag monitor running: the converter and its
@@ -298,6 +416,49 @@ uint32_t BSP_McuSleep(uint32_t sleep_time_ms)
     SagMonitorHalt();
   }
 
+  uint32_t slept_ms = 0u;
+
+  /* In chunks, with the watchdog fed between them (SLEEP_CHUNK_MAX_MS). Only
+     the button ends the sleep early; any other wake goes on to the next
+     chunk, as the caller's own loop would. */
+  while (slept_ms < sleep_time_ms)
+  {
+    uint32_t chunk_ms = sleep_time_ms - slept_ms;
+
+    if (chunk_ms > SLEEP_CHUNK_MAX_MS)
+    {
+      chunk_ms = SLEEP_CHUNK_MAX_MS;
+    }
+
+    button_woke = false;
+
+    uint32_t chunk_slept_ms = SleepOnce(chunk_ms);
+
+    slept_ms += chunk_slept_ms;
+
+    /* Fed for time that really passed, and only then. A chunk that measures
+       none -- a wakeup that fires at once, a calendar that has stopped --
+       would otherwise spin here forever with the watchdog content. */
+    if (chunk_slept_ms != 0u)
+    {
+      BSP_Watchdog_Refresh();
+    }
+
+    if (button_woke)
+    {
+      break;
+    }
+  }
+
+  return slept_ms;
+}
+
+/* One Stop, of at most WAKEUP_MAX_SECONDS, ended by the RTC wakeup or the
+ * button. Returns what the RTC says it lasted, and folds that into
+ * HAL_GetTick().
+ */
+static uint32_t SleepOnce(uint32_t sleep_time_ms)
+{
   if (sleep_time_ms == 0u)
   {
     return 0u;
@@ -398,9 +559,9 @@ void BSP_McuReset(void)
 
 BSP_ResetType BSP_GetResetReason(void)
 {
-  /* Checked in order of specificity. A pin reset sets PINRSTF alongside
-     nothing else, and is reported as None: it is the debugger or the reset
-     button, which is not an event worth reporting. */
+  /* Checked in order of specificity: every internal reset also drives the
+     NRST pin low, so PINRSTF comes with all of them, and only means the pin
+     -- the Reset button, or a debugger -- when nothing else is set. */
   if ((reset_flags & RCC_CSR_LPWRRSTF) != 0u)
   {
     return BSP_Reset_LowPower;
@@ -413,12 +574,17 @@ BSP_ResetType BSP_GetResetReason(void)
 
   if ((reset_flags & RCC_CSR_SFTRSTF) != 0u)
   {
-    return BSP_Reset_Software;
+    return fault_reset ? BSP_Reset_Fault : BSP_Reset_Software;
   }
 
   if ((reset_flags & RCC_CSR_PORRSTF) != 0u)
   {
     return BSP_Reset_PowerOn;
+  }
+
+  if ((reset_flags & RCC_CSR_PINRSTF) != 0u)
+  {
+    return BSP_Reset_Pin;
   }
 
   return BSP_Reset_None;
@@ -437,6 +603,60 @@ bool BSP_Sensor_I2cRead(uint8_t address, uint8_t* data, uint16_t len)
 {
   return (HAL_I2C_Master_Receive(&hi2c1, (uint16_t) (address << 1), data, len,
                                  I2C_TIMEOUT_MS) == HAL_OK);
+}
+
+/* Half an I2C clock for the hand-driven recovery: about 12 us at 16 MHz, so
+ * some 40 kHz -- slower than the bus ever runs, which is the safe side. */
+static void I2cBitDelay(void)
+{
+  for (volatile uint32_t n = 0u; n < 20u; n++)
+  {
+  }
+}
+
+void BSP_Sensor_RecoverBus(void)
+{
+  /* The controller first, all the way: de-initialised (pins released, clock
+     off) and then put through an RCC reset, which clears a BUSY flag that
+     clearing PE alone is not guaranteed to. */
+  (void) HAL_I2C_DeInit(&hi2c1);
+  __HAL_RCC_I2C1_FORCE_RESET();
+  __HAL_RCC_I2C1_RELEASE_RESET();
+
+  /* Both lines by hand, open-drain and released: the board's pull-ups hold
+     them high, and nothing is ever driven against the sensor. */
+  GPIO_InitTypeDef gpio = {0};
+
+  gpio.Pin   = SCL_TEMP_SENS_Pin | SDA_TEMP_SENS_Pin;
+  gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+  gpio.Pull  = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+
+  HAL_GPIO_WritePin(GPIOA, SCL_TEMP_SENS_Pin | SDA_TEMP_SENS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_Init(GPIOA, &gpio);
+
+  /* A sensor partway through a byte holds SDA low until it has clocked out
+     the rest. Nine clocks finish any byte and its acknowledge. */
+  for (uint32_t i = 0u; (i < 9u) && (HAL_GPIO_ReadPin(GPIOA, SDA_TEMP_SENS_Pin) == GPIO_PIN_RESET); i++)
+  {
+    HAL_GPIO_WritePin(GPIOA, SCL_TEMP_SENS_Pin, GPIO_PIN_RESET);
+    I2cBitDelay();
+    HAL_GPIO_WritePin(GPIOA, SCL_TEMP_SENS_Pin, GPIO_PIN_SET);
+    I2cBitDelay();
+  }
+
+  /* A START and then a STOP, with SCL high throughout: whatever the sensor
+     thought was going on, it is now idle. */
+  HAL_GPIO_WritePin(GPIOA, SDA_TEMP_SENS_Pin, GPIO_PIN_RESET);
+  I2cBitDelay();
+  HAL_GPIO_WritePin(GPIOA, SDA_TEMP_SENS_Pin, GPIO_PIN_SET);
+  I2cBitDelay();
+
+  /* And back to the controller. HAL_I2C_Init runs the MSP init again (pins to
+     AF, clock on) from the handle, which DeInit leaves as MX_I2C1_Init set it.
+     Its CR1 write also restores MX_I2C1_Init's filters: analog on and digital
+     off are what CR1 = 0 means. */
+  (void) HAL_I2C_Init(&hi2c1);
 }
 
 /* --- Wi-Fi module --------------------------------------------------------- */
@@ -548,6 +768,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
        long it was held -- is the application's, which reads the level through
        BSP_Wifi_ButtonIsPressed once it is running again. */
     button_event = true;
+    button_woke  = true;
   }
 }
 
